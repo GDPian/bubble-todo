@@ -207,6 +207,31 @@
   .hm-row .span2 { grid-column: span 2; } .hm-row .span3 { grid-column: 1 / -1; }
   .hm-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; grid-column: 1 / -1; }
   .hm-row.off { opacity: .45; }
+  /* habit card + history */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 8px; margin-top: 8px; }
+  .stat { background: var(--bg); border: 1px solid var(--panel-border); border-radius: 10px; padding: 8px 10px; }
+  .stat b { display: block; font-size: 1.25rem; }
+  .stat span { font-size: .7rem; color: var(--muted); }
+  .heat { --c: #a78bfa; display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 13px);
+          grid-auto-columns: 13px; gap: 3px; overflow-x: auto; padding-bottom: 4px; }
+  .heat .cell { width: 13px; height: 13px; border-radius: 3px; background: var(--bg); border: 1px solid var(--panel-border); }
+  .heat .cell.on { background: var(--c); border-color: var(--c); }
+  .heat .cell.today { outline: 2px solid var(--text); outline-offset: 1px; }
+  .heat .cell.none { visibility: hidden; }
+  .logrow { display: grid; grid-template-columns: 86px 1fr; gap: 8px; align-items: center; padding: 5px 0;
+            border-top: 1px solid var(--panel-border); font-size: .85rem; }
+  .logrow .d { color: var(--muted); white-space: nowrap; }
+  .logrow input { padding: 5px 8px; font-size: 14px; }
+  .logrow .sync { color: var(--muted); font-style: italic; }
+  .today-box { background: var(--bg); border: 1px solid var(--panel-border); border-radius: 12px; padding: 10px; margin: 6px 0; display: grid; gap: 8px; }
+  .today-box textarea { font-size: 16px; }
+  .histrow { display: grid; grid-template-columns: 1fr 64px 64px 64px; gap: 6px; align-items: center; width: 100%;
+             background: var(--bg); border: 1px solid var(--panel-border); border-radius: 10px;
+             padding: 9px 10px; margin-top: 6px; color: var(--text); text-align: left; }
+  .histrow.head { background: none; border: 0; color: var(--muted); font-size: .7rem; text-transform: uppercase;
+                  letter-spacing: .06em; padding: 0 10px; cursor: default; }
+  .histrow .num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+  .histrow .sub { display: block; font-size: .7rem; color: var(--muted); font-weight: 400; }
   @media (max-width: 520px) { .hm-row { grid-template-columns: 1fr 1fr; } .hm-row .span2 { grid-column: 1 / -1; } }
 </style>
 </head>
@@ -255,11 +280,14 @@
   <section class="panel" id="habits">
     <div class="panel-head">
       <h2>Habits <span id="habitSummary" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2>
-      <button class="btn ghost small" id="btnHabitSettings">⚙ Settings</button>
+      <span style="display:flex;gap:6px">
+        <button class="btn ghost small" id="btnHabitHistory">📊 History</button>
+        <button class="btn ghost small" id="btnHabitSettings">⚙ Settings</button>
+      </span>
     </div>
     <div id="habitStrip"></div>
     <div class="msg err" id="habitMsg"></div>
-    <div class="msg">Tap to tick off · tap again to undo · bubbles grow when you fall behind</div>
+    <div class="msg">Tap to tick off · tap a ticked habit for its history · bubbles grow when you fall behind</div>
   </section>
 
   <div class="main">
@@ -376,6 +404,28 @@
   </div>
 </div>
 
+<!-- ============ Habit card: today's note, stats, calendar, log ============ -->
+<div class="overlay" id="hdOverlay" hidden>
+  <div class="sheet big" role="dialog" aria-modal="true" aria-label="Habit history">
+    <div class="sheet-head"><h2 id="hdTitle">Habit</h2><button class="btn ghost small" id="hdClose">Close</button></div>
+    <div id="hdToday"></div>
+    <div id="hdStats" class="stats"></div>
+    <h2 style="margin-top:14px">Last 26 weeks</h2>
+    <div id="hdHeat" class="heat"></div>
+    <h2 style="margin-top:14px">Log</h2>
+    <div id="hdLog"></div>
+    <div class="msg err" id="hdMsg"></div>
+  </div>
+</div>
+
+<!-- ============ All habits: counts over time ============ -->
+<div class="overlay" id="histOverlay" hidden>
+  <div class="sheet big" role="dialog" aria-modal="true" aria-label="All habit history">
+    <div class="sheet-head"><h2>Habit history</h2><button class="btn ghost small" id="histClose">Close</button></div>
+    <div id="histBody"><p class="meta">Loading…</p></div>
+  </div>
+</div>
+
 <!-- ============ Habit settings ============ -->
 <div class="overlay" id="habitOverlay" hidden>
   <div class="sheet big" role="dialog" aria-modal="true" aria-label="Habit settings">
@@ -394,6 +444,7 @@
       </label>
       <label>Grace days <input id="haGrace" type="number" min="0" max="14" value="2"></label>
       <label>Weekly target <input id="haTarget" type="number" min="1" max="7" value="3"></label>
+      <label class="span3" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="haAsk" style="width:auto;padding:0"> Ask “what did you do?” when I tick it</label>
       <div class="hm-actions"><button class="btn" type="submit">Add habit</button></div>
     </form>
     <div class="msg err" id="hmMsg"></div>
@@ -521,7 +572,7 @@ const HABIT_DEFAULTS = [
   { name: 'Worldle',        category: 'fun',    kind: 'daily',  target_per_week: 7, sort_order: 3 },
   { name: 'Connections',    category: 'fun',    kind: 'daily',  target_per_week: 7, sort_order: 4 },
   { name: '10k steps',      category: 'health', kind: 'daily',  target_per_week: 7, sort_order: 5 },
-  { name: 'Send a CV',      category: 'career', kind: 'daily',  target_per_week: 7, sort_order: 6 },
+  { name: 'Send a CV',      category: 'career', kind: 'daily',  target_per_week: 7, sort_order: 6, ask_note: true },
   { name: 'Go to the gym',  category: 'health', kind: 'weekly', target_per_week: 3, sort_order: 7 },
   { name: 'Drink water',    category: 'health', kind: 'daily',  target_per_week: 7, sort_order: 8 },
   { name: 'Weigh in',       category: 'health', kind: 'daily',  target_per_week: 7, sort_order: 9 },
@@ -552,7 +603,7 @@ async function loadHabits() {
   habits = r.data;
 
   const since = new Date(today()); since.setDate(since.getDate() - 90);
-  const l = await sb.from('habit_log').select('id,habit_id,done_on').gte('done_on', toISO(since));
+  const l = await sb.from('habit_log').select('id,habit_id,done_on,note').gte('done_on', toISO(since));
   if (l.error) { habitError('Could not load habit history: ' + l.error.message); return; }
   logs = l.data;
   habitError('');
@@ -646,7 +697,7 @@ function renderHabits() {
     b.innerHTML = '<span class="n"></span><span class="l"></span>';
     b.querySelector('.n').textContent = h.name;
     b.querySelector('.l').textContent = (s.done ? '✓ ' : '') + s.label;
-    b.addEventListener('click', () => { if (!habitDragJustEnded) toggleHabit(h); });
+    b.addEventListener('click', () => { if (!habitDragJustEnded) onHabitTap(h); });
     attachHabitDrag(b, h);
     strip.appendChild(b);
   });
@@ -740,33 +791,265 @@ async function reorderHabits(from, to) {
   if (!$('habitOverlay').hidden) renderHabitSettings();
 }
 
-// Tick a habit off for today, or undo it (screen updates first, saves in the background)
-async function toggleHabit(h) {
-  if (h.busy) return;
+// Tap on a habit bubble: not done yet -> tick it; already done -> open its card (history, note, undo).
+function onHabitTap(h) {
   const todayStr = toISO(today());
-  const existing = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && !l.synced);
-  const synced = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && l.synced);
-  if (!existing && synced) { habitError('"' + h.name + '" ticked itself from your sheet today.'); return; }
-  h.busy = true;
-  let problem = '';
-  if (existing) {
-    logs = logs.filter(l => l !== existing);
-    renderHabits();
-    const { error } = await sb.from('habit_log').delete().eq('habit_id', h.id).eq('done_on', todayStr);
-    if (error) problem = 'Could not undo: ' + error.message;
-  } else {
-    const temp = { id: 'tmp-' + Date.now(), habit_id: h.id, done_on: todayStr };
-    logs.push(temp);
-    renderHabits();
-    const { data, error } = await sb.from('habit_log')
-      .insert({ habit_id: h.id, done_on: todayStr }).select('id,habit_id,done_on').single();
-    if (error) problem = 'Could not save: ' + error.message;
-    else Object.assign(temp, data);
-  }
-  if (problem) { await loadHabits(); habitError(problem); }
-  else habitError('');
-  h.busy = false;
+  const done = logs.some(l => l.habit_id === h.id && l.done_on === todayStr);
+  if (done) openHabitCard(h.id); else tickHabit(h);
 }
+
+// Tick a habit for today (screen updates first, saves in the background)
+async function tickHabit(h) {
+  if (h.busy) return;
+  h.busy = true;
+  const todayStr = toISO(today());
+  const temp = { id: 'tmp-' + Date.now(), habit_id: h.id, done_on: todayStr, note: '' };
+  logs.push(temp);
+  renderHabits();
+  const { data, error } = await sb.from('habit_log')
+    .insert({ habit_id: h.id, done_on: todayStr }).select('id,habit_id,done_on,note').single();
+  h.busy = false;
+  if (error) { await loadHabits(); habitError('Could not save: ' + error.message); return; }
+  Object.assign(temp, data);
+  habitError('');
+  // habits set to "ask what I did" (like Send a CV) open the note box straight away
+  if (h.ask_note) openHabitCard(h.id, { focusNote: true });
+}
+
+// Undo today's tick
+async function undoToday(h) {
+  if (h.busy) return false;
+  const todayStr = toISO(today());
+  const mine = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && !l.synced);
+  if (!mine) return false;
+  h.busy = true;
+  logs = logs.filter(l => l !== mine);
+  fullLogs = fullLogs.filter(l => !(l.habit_id === h.id && l.done_on === todayStr));
+  renderHabits();
+  const { error } = await sb.from('habit_log').delete().eq('habit_id', h.id).eq('done_on', todayStr);
+  h.busy = false;
+  if (error) { await loadHabits(); habitError('Could not undo: ' + error.message); return false; }
+  habitError('');
+  return true;
+}
+
+/* ---------- 2c. Habit history: counts over time, calendar, notes ---------- */
+// The strip only keeps the last 90 days in memory. The history screens load EVERY tick ever,
+// 1000 rows at a time (that is the most the database sends per request).
+
+let fullLogs = [];   // every manual tick ever, loaded when a history screen opens
+const HABIT_COLOURS = { fun: '#a78bfa', health: '#34d399', career: '#f472b6' };
+
+async function fetchAllLogs() {
+  const out = [], PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await sb.from('habit_log').select('id,habit_id,done_on,note')
+      .order('done_on').order('id').range(from, from + PAGE - 1);
+    if (error) throw error;
+    out.push(...data);
+    if (data.length < PAGE) break;
+  }
+  return out;
+}
+
+// One entry per day this habit was done: manual ticks (can carry a note) and days ticked from the sheet
+function habitEntries(h) {
+  const map = new Map();
+  fullLogs.filter(l => l.habit_id === h.id).forEach(l =>
+    map.set(l.done_on, { date: l.done_on, row: l, note: l.note || '', synced: false }));
+  logs.filter(l => l.habit_id === h.id && !l.synced && !map.has(l.done_on)).forEach(l =>
+    map.set(l.done_on, { date: l.done_on, row: l, note: l.note || '', synced: false }));
+  logs.filter(l => l.habit_id === h.id && l.synced && !map.has(l.done_on)).forEach(l =>
+    map.set(l.done_on, { date: l.done_on, row: null, note: '', synced: true }));
+  return [...map.values()].sort((a, b) => b.date.localeCompare(a.date));
+}
+
+function habitStats(h) {
+  const entries = habitEntries(h);
+  const set = new Set(entries.map(e => e.date));
+  const t = today(), todayStr = toISO(t);
+  const d30 = new Date(t); d30.setDate(d30.getDate() - 29);
+  const since30 = toISO(d30), monthPrefix = todayStr.slice(0, 7);
+  let last30 = 0, month = 0;
+  set.forEach(d => { if (d >= since30) last30++; if (d.startsWith(monthPrefix)) month++; });
+
+  let cur = 0; const c = new Date(t);                        // current streak (today not done yet is fine)
+  if (!set.has(todayStr)) c.setDate(c.getDate() - 1);
+  while (set.has(toISO(c))) { cur++; c.setDate(c.getDate() - 1); }
+
+  let best = 0, run = 0, prev = null;                        // longest streak ever
+  [...set].sort().forEach(d => {
+    run = (prev && Math.round((parseDate(d) - parseDate(prev)) / 86400000) === 1) ? run + 1 : 1;
+    if (run > best) best = run;
+    prev = d;
+  });
+
+  let weeksOn = 0;                                           // weekly habits: weeks that hit the target
+  if (h.kind === 'weekly') {
+    const wk = {};
+    set.forEach(d => {
+      const dt = parseDate(d); dt.setDate(dt.getDate() - (dt.getDay() + 6) % 7);
+      const k = toISO(dt); wk[k] = (wk[k] || 0) + 1;
+    });
+    weeksOn = Object.values(wk).filter(n => n >= h.target_per_week).length;
+  }
+  return { entries, set, total: set.size, last30, month, cur, best, weeksOn };
+}
+
+const dayLabel = iso => parseDate(iso).toLocaleDateString(undefined,
+  { weekday: 'short', day: 'numeric', month: 'short', year: iso.slice(0, 4) === String(new Date().getFullYear()) ? undefined : 'numeric' });
+
+// Save the note on one tick
+async function saveNote(row, note, say) {
+  if (!row || String(row.id).startsWith('tmp-')) { say('Still saving the tick, try again in a second.'); return false; }
+  say('Saving…');
+  const { error } = await sb.from('habit_log').update({ note }).eq('id', row.id);
+  if (error) { say('Could not save: ' + error.message); return false; }
+  row.note = note;
+  [fullLogs, logs].forEach(arr => { const f = arr.find(l => l.id === row.id); if (f) f.note = note; });
+  say('Saved ✓');
+  return true;
+}
+
+/* --- the card for one habit --- */
+let cardId = null, logShown = 40;
+
+async function openHabitCard(id, opts = {}) {
+  const h = habits.find(x => x.id === id);
+  if (!h) return;
+  cardId = id; logShown = 40;
+  $('hdTitle').textContent = h.name;
+  $('hdMsg').textContent = '';
+  $('hdOverlay').hidden = false;
+  buildHabitToday(h, opts);
+  renderHabitCard(h);                          // instant, from what is already loaded
+  try { fullLogs = await fetchAllLogs(); }     // then fill in the whole history
+  catch (e) { $('hdMsg').textContent = 'Could not load the full history: ' + e.message; }
+  if (cardId === id) renderHabitCard(h);
+}
+function closeHabitCard() { cardId = null; $('hdOverlay').hidden = true; }
+
+// Top box: today's note + undo (or a tick button if it is not done yet)
+function buildHabitToday(h, opts) {
+  const box = $('hdToday'); box.textContent = '';
+  const todayStr = toISO(today());
+  const mine = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && !l.synced);
+  const synced = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && l.synced);
+  const wrap = document.createElement('div'); wrap.className = 'today-box';
+  if (mine) {
+    wrap.innerHTML = '<div class="meta">✓ Done today. What did you do?</div>' +
+      '<textarea rows="2" maxlength="500" placeholder="e.g. Applied to Acme, sent CV to a recruiter"></textarea>' +
+      '<div class="form-actions"><button class="btn good save">Save note</button>' +
+      '<button class="btn danger undo">Undo today’s tick</button></div><div class="meta rowmsg"></div>';
+    const ta = wrap.querySelector('textarea'), say = t => { wrap.querySelector('.rowmsg').textContent = t; };
+    ta.value = mine.note || '';
+    wrap.querySelector('.save').onclick = () => saveNote(mine, ta.value.trim(), say);
+    wrap.querySelector('.undo').onclick = async () => { if (await undoToday(h)) closeHabitCard(); };
+    if (opts.focusNote) setTimeout(() => ta.focus(), 60);
+  } else if (synced) {
+    wrap.innerHTML = '<div class="meta">✓ Ticked itself from your sheet today. Change it in the sheet.</div>';
+  } else {
+    wrap.innerHTML = '<div class="meta">Not done today.</div><div class="form-actions"><button class="btn good tick">Tick it now</button></div>';
+    wrap.querySelector('.tick').onclick = () => tickHabit(h).then(() => { if (cardId === h.id && !h.ask_note) { buildHabitToday(h, {}); renderHabitCard(h); } });
+  }
+  box.appendChild(wrap);
+}
+
+// Stats, calendar and log (safe to redraw: it leaves the note box alone)
+function renderHabitCard(h) {
+  const st = habitStats(h), todayStr = toISO(today());
+
+  const tiles = [['All time', st.total], ['Last 30 days', st.last30], ['This month', st.month]];
+  if (h.kind === 'weekly') tiles.push(['Weeks on target', st.weeksOn], ['Target / week', h.target_per_week]);
+  else tiles.push(['Streak', st.cur >= 2 ? '🔥 ' + st.cur : st.cur], ['Best streak', st.best]);
+  const stats = $('hdStats'); stats.textContent = '';
+  tiles.forEach(([label, val]) => {
+    const d = document.createElement('div'); d.className = 'stat';
+    d.innerHTML = '<b></b><span></span>'; d.querySelector('b').textContent = val; d.querySelector('span').textContent = label;
+    stats.appendChild(d);
+  });
+
+  // calendar: 26 weeks, one column per week (Monday at the top)
+  const heat = $('hdHeat'); heat.textContent = '';
+  heat.style.setProperty('--c', HABIT_COLOURS[h.category] || '#a78bfa');
+  const t = today(), monday = new Date(t); monday.setDate(t.getDate() - (t.getDay() + 6) % 7);
+  const start = new Date(monday); start.setDate(start.getDate() - 25 * 7);
+  for (let i = 0; i < 26 * 7; i++) {
+    const d = new Date(start); d.setDate(start.getDate() + i);
+    const iso = toISO(d), cell = document.createElement('div');
+    cell.className = 'cell' + (d > t ? ' none' : st.set.has(iso) ? ' on' : '') + (iso === todayStr ? ' today' : '');
+    cell.title = dayLabel(iso);
+    heat.appendChild(cell);
+  }
+
+  // log: newest first. Manual ticks get an editable note.
+  const log = $('hdLog'); log.textContent = '';
+  const rows = st.entries.filter(e => !(e.date === todayStr && !e.synced));   // today's own tick lives in the box above
+  if (!rows.length) { const p = document.createElement('div'); p.className = 'meta'; p.textContent = 'Nothing logged yet.'; log.appendChild(p); }
+  rows.slice(0, logShown).forEach(e => {
+    const r = document.createElement('div'); r.className = 'logrow';
+    r.innerHTML = '<span class="d"></span><span class="body"></span>';
+    r.querySelector('.d').textContent = dayLabel(e.date);
+    const body = r.querySelector('.body');
+    if (e.synced) { body.className = 'body sync'; body.textContent = 'from your sheet'; }
+    else {
+      const inp = document.createElement('input');
+      inp.maxLength = 500; inp.placeholder = 'Add a note'; inp.value = e.note;
+      inp.addEventListener('change', async () => {
+        const ok = await saveNote(e.row, inp.value.trim(), t => { $('hdMsg').textContent = t === 'Saved ✓' ? '' : t; });
+        inp.style.borderColor = ok ? 'var(--ok)' : 'var(--error)';
+      });
+      body.appendChild(inp);
+    }
+    log.appendChild(r);
+  });
+  if (rows.length > logShown) {
+    const more = document.createElement('button');
+    more.className = 'btn ghost small'; more.style.marginTop = '8px';
+    more.textContent = `Show more (${rows.length - logShown} older)`;
+    more.onclick = () => { logShown += 60; renderHabitCard(h); };
+    log.appendChild(more);
+  }
+}
+
+$('hdClose').onclick = closeHabitCard;
+$('hdOverlay').addEventListener('click', e => { if (e.target === $('hdOverlay')) closeHabitCard(); });
+
+/* --- the overview of all habits --- */
+async function openHistory() {
+  $('histOverlay').hidden = false;
+  $('histBody').innerHTML = '<p class="meta">Loading…</p>';
+  try { fullLogs = await fetchAllLogs(); }
+  catch (e) { $('histBody').textContent = 'Could not load the history: ' + e.message; return; }
+  renderHistory();
+}
+
+function renderHistory() {
+  const body = $('histBody'); body.textContent = '';
+  const head = document.createElement('div'); head.className = 'histrow head';
+  head.innerHTML = '<span>Habit</span><span class="num">All time</span><span class="num">30 days</span><span class="num">Month</span>';
+  body.appendChild(head);
+  habits.forEach(h => {
+    const st = habitStats(h);
+    const b = document.createElement('button'); b.className = 'histrow';
+    b.innerHTML = '<span><span class="nm"></span><span class="sub"></span></span><span class="num"></span><span class="num"></span><span class="num"></span>';
+    b.querySelector('.nm').textContent = h.name;
+    b.querySelector('.sub').textContent = h.kind === 'weekly'
+      ? `${st.weeksOn} weeks on target`
+      : (st.cur >= 2 ? `🔥 ${st.cur} day streak · best ${st.best}` : `best streak ${st.best}`);
+    const nums = b.querySelectorAll('.num');
+    nums[0].textContent = st.total; nums[1].textContent = st.last30; nums[2].textContent = st.month;
+    b.onclick = () => { $('histOverlay').hidden = true; openHabitCard(h.id); };
+    body.appendChild(b);
+  });
+  const note = document.createElement('p'); note.className = 'meta';
+  note.textContent = 'Tap a habit for its calendar and notes. Weigh in and gym counts come from your sheet.';
+  body.appendChild(note);
+}
+
+$('btnHabitHistory').onclick = openHistory;
+$('histClose').onclick = () => { $('histOverlay').hidden = true; };
+$('histOverlay').addEventListener('click', e => { if (e.target === $('histOverlay')) $('histOverlay').hidden = true; });
 
 /* ---------- 3. Login ---------- */
 const aEmail = $('aEmail');
@@ -809,7 +1092,7 @@ function onSession(session) {
   } else {
     currentUser = null;
     tasks = []; habits = []; logs = [];
-    closeDetail(); $('habitOverlay').hidden = true;
+    closeDetail(); closeHabitCard(); $('habitOverlay').hidden = true; $('histOverlay').hidden = true; fullLogs = [];
     document.body.classList.add('signedout');
   }
 }
@@ -1143,6 +1426,7 @@ function renderHabitSettings() {
       <label class="g">Grace days <input class="f-grace" type="number" min="0" max="14"></label>
       <label class="w">Weekly target <input class="f-target" type="number" min="1" max="7"></label>
       <label class="span3">Sync URL (optional – ticks itself from your sheet) <input class="f-url" placeholder="https://script.google.com/macros/s/…/exec?what=weight&token=…"></label>
+      <label class="span3" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" class="f-ask" style="width:auto;padding:0"> Ask “what did you do?” when I tick it (good for Send a CV)</label>
       <div class="hm-actions">
         <button class="btn small save">Save</button>
         <button class="btn ghost small up" title="Move earlier">▲</button>
@@ -1156,6 +1440,7 @@ function renderHabitSettings() {
     row.querySelector('.f-grace').value = h.grace_days;
     row.querySelector('.f-target').value = h.target_per_week;
     row.querySelector('.f-url').value = h.source_url || '';
+    row.querySelector('.f-ask').checked = !!h.ask_note;
 
     // Grace days only matter for daily habits; the weekly target only for weekly ones
     const sync = () => {
@@ -1180,6 +1465,7 @@ function renderHabitSettings() {
         grace_days: clamp(Number(row.querySelector('.f-grace').value) || 0, 0, 14),
         target_per_week: kind === 'weekly' ? clamp(Number(row.querySelector('.f-target').value) || 3, 1, 7) : 7,
         source_url: url || null,
+        ask_note: row.querySelector('.f-ask').checked,
       }).eq('id', h.id);
       if (error) { say(error.message); return; }
       await loadHabits();
@@ -1209,6 +1495,7 @@ $('hmAdd').addEventListener('submit', async e => {
     name, category: $('haCat').value, kind,
     grace_days: clamp(Number($('haGrace').value) || 0, 0, 14),
     target_per_week: kind === 'weekly' ? clamp(Number($('haTarget').value) || 3, 1, 7) : 7,
+    ask_note: $('haAsk').checked,
     sort_order: habits.reduce((m, h) => Math.max(m, h.sort_order), 0) + 1,
   });
   if (error) { hmError(error.message.includes('duplicate') ? 'You already have a habit with that name.' : error.message); return; }
@@ -1227,7 +1514,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && cu
 // Escape closes whichever card is open
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  closeDetail(); $('habitOverlay').hidden = true;
+  closeDetail(); closeHabitCard(); $('habitOverlay').hidden = true; $('histOverlay').hidden = true;
 });
 
 /* ---------- 11. Home screen icon (drawn here so we need only one file) ---------- */

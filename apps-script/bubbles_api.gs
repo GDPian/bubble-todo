@@ -17,7 +17,7 @@
  */
 
 const BUBBLES_SHEET_ID = '1HcqxvQ08C5kr8PLAhzXowsy8WsC9nPwI7Vrz722LIGQ';   // your Hevy sheet
-const BUBBLES_DAYS = 90;                                                    // how far back to report
+const BUBBLES_DAYS = 1100;                                                  // how far back to report (about 3 years, for habit history)
 
 function doGet(e) {
   const p = (e && e.parameter) || {};

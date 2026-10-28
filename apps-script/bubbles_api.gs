@@ -23,7 +23,7 @@
 
 const BUBBLES_SHEET_ID = '1HcqxvQ08C5kr8PLAhzXowsy8WsC9nPwI7Vrz722LIGQ';   // your Hevy sheet
 const BUBBLES_DAYS = 1100;       // how far back to report (about 3 years, for habit history)
-const BUBBLES_STEP_GOAL = 10000; // steps needed for the "10k steps" habit to tick
+const BUBBLES_STEP_GOAL = 8000;  // steps needed for the steps habit to tick (iPhone-only count runs ~10% under Health)
 
 // How exercises are sorted into Push / Pull / Legs. Matching looks for these words inside the
 // exercise name (lower-case). Lists are checked in this order and the FIRST match wins, so

@@ -9,7 +9,7 @@ The path is: **Health -> Shortcut -> your Apps Script link -> "Steps" tab in the
 - save: `<URL>?what=steps_set&date=2026-10-28&steps=8123&token=<token>`  (a day's total can only go up, so a late or lower reading never overwrites a higher one)
 - read: `<URL>?what=steps&token=<token>` -> paste this as the Sync URL on the **10k steps** habit in Bubbles
 
-The habit ticks itself on any day at or above `BUBBLES_STEP_GOAL` (10,000 in the script) and the bubble shows today's running total (for example 7.4k).
+The habit ticks itself on any day at or above `BUBBLES_STEP_GOAL` (8,000 in the script, because an iPhone-only count runs about 10% under the Health app) and the bubble shows today's running total (for example 7.4k).
 
 ## 2. The Shortcut (Shortcuts app on the iPhone)
 Create a new shortcut called **Send steps** with these actions, in order:

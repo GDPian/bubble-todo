@@ -608,7 +608,7 @@ let sizeScale = 0.75;
 try { const v = parseFloat(localStorage.getItem('bubbles.size')); if (v >= 0.5 && v <= 1.2) sizeScale = v; } catch (_) {}
 
 const HABIT_BASE = 76;   // normal bubble size (px) at scale 1
-const HABIT_DONE = 68;   // size once ticked off today
+const HABIT_DONE = 74;   // size once ticked off today
 const HABIT_STEP = 5;    // extra px per "growth step"
 const HABIT_CAP = 6;     // after this many steps: stop growing and pulse instead
 

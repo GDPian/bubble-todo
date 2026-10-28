@@ -218,6 +218,14 @@
   .heat .cell.on { background: var(--c); border-color: var(--c); }
   .heat .cell.today { outline: 2px solid var(--text); outline-offset: 1px; }
   .heat .cell.none { visibility: hidden; }
+  /* workout calendar: bigger cells with a letter code, one colour per type */
+  .heat.typed { grid-template-rows: repeat(7, 24px); grid-auto-columns: 24px; }
+  .heat.typed .cell { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+                      font-size: 10px; font-weight: 700; color: #0f172a; }
+  .heat .cell.t-push  { background: #fb923c; border-color: #fb923c; }
+  .heat .cell.t-pull  { background: #38bdf8; border-color: #38bdf8; }
+  .heat .cell.t-legs  { background: #a3e635; border-color: #a3e635; }
+  .heat .cell.t-mixed { background: #cbd5e1; border-color: #cbd5e1; }
   .logrow { display: grid; grid-template-columns: 86px 1fr; gap: 8px; align-items: center; padding: 5px 0;
             border-top: 1px solid var(--panel-border); font-size: .85rem; }
   .logrow .d { color: var(--muted); white-space: nowrap; }
@@ -426,6 +434,7 @@
     </div>
     <h2 style="margin-top:14px">Last 26 weeks</h2>
     <div id="hdHeat" class="heat"></div>
+    <div id="hdHeatKey" class="meta" style="margin-top:4px"></div>
     <h2 style="margin-top:14px">Log</h2>
     <div id="hdLog"></div>
     <div class="msg err" id="hdMsg"></div>
@@ -1079,18 +1088,27 @@ function renderHabitCard(h) {
   $('hdChartWrap').hidden = !hasSeries;
   if (hasSeries) drawSeries($('hdChart'), h.series, HABIT_COLOURS[h.category] || '#a78bfa', ' kg', Number($('hdChartRange').value));
 
-  // calendar: 26 weeks, one column per week (Monday at the top)
+  // calendar: 26 weeks, one column per week (Monday at the top).
+  // Workout habits show Ps / Pl / L (push / pull / legs) in each day instead of a plain dot.
+  const TYPE_CODE = { push: 'Ps', pull: 'Pl', legs: 'L', mixed: 'Mx' };
+  const typed = !!(h.types && Object.keys(h.types).length);
   const heat = $('hdHeat'); heat.textContent = '';
+  heat.className = 'heat' + (typed ? ' typed' : '');
   heat.style.setProperty('--c', HABIT_COLOURS[h.category] || '#a78bfa');
   const t = today(), monday = new Date(t); monday.setDate(t.getDate() - (t.getDay() + 6) % 7);
   const start = new Date(monday); start.setDate(start.getDate() - 25 * 7);
   for (let i = 0; i < 26 * 7; i++) {
     const d = new Date(start); d.setDate(start.getDate() + i);
     const iso = toISO(d), cell = document.createElement('div');
-    cell.className = 'cell' + (d > t ? ' none' : st.set.has(iso) ? ' on' : '') + (iso === todayStr ? ' today' : '');
-    cell.title = dayLabel(iso);
+    const type = typed && st.set.has(iso) ? h.types[iso] : null;
+    cell.className = 'cell' + (d > t ? ' none' : st.set.has(iso) ? ' on' : '') + (iso === todayStr ? ' today' : '')
+                   + (type && TYPE_CODE[type] ? ' t-' + type : '');
+    if (type && TYPE_CODE[type]) cell.textContent = TYPE_CODE[type];
+    cell.title = dayLabel(iso) + (type ? ' – ' + type : '');
     heat.appendChild(cell);
   }
+  $('hdHeatKey').textContent = typed ? 'Ps = Push · Pl = Pull · L = Legs · Mx = Mixed (grey)' : '';
+  if (typed) heat.scrollLeft = heat.scrollWidth;       // start scrolled to this week
 
   // log: newest first. Manual ticks get an editable note.
   const log = $('hdLog'); log.textContent = '';

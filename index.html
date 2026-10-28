@@ -218,6 +218,9 @@
   .heat .cell.on { background: var(--c); border-color: var(--c); }
   .heat .cell.today { outline: 2px solid var(--text); outline-offset: 1px; }
   .heat .cell.none { visibility: hidden; }
+  /* a day the sheet has a figure for but the goal was not reached (e.g. 4,665 steps): light red */
+  .heat .cell.miss { background: rgba(248,113,113,.35); border-color: rgba(248,113,113,.55); }
+  .logrow.miss .d, .logrow.miss .sync { color: #f87171; }
   /* workout calendar: bigger cells with a letter code, one colour per type */
   .heat.typed { grid-template-rows: repeat(7, 24px); grid-auto-columns: 24px; }
   .heat.typed .cell { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
@@ -1071,6 +1074,8 @@ $('hdChartRange').addEventListener('change', () => { const h = habits.find(x => 
 // Stats, calendar and log (safe to redraw: it leaves the note box alone)
 function renderHabitCard(h) {
   const st = habitStats(h), todayStr = toISO(today());
+  // Days the sheet has a figure for but that did not count as done (e.g. steps under the goal). Today is excluded.
+  const missedDays = new Set(h.values ? Object.keys(h.values).filter(d => d !== todayStr && !st.set.has(d)) : []);
 
   const tiles = [['All time', st.total], ['Last 30 days', st.last30], ['This month', st.month]];
   if (h.kind === 'weekly') tiles.push(['Weeks on target', st.weeksOn], ['Target / week', h.target_per_week]);
@@ -1101,21 +1106,26 @@ function renderHabitCard(h) {
     const d = new Date(start); d.setDate(start.getDate() + i);
     const iso = toISO(d), cell = document.createElement('div');
     const type = typed && st.set.has(iso) ? h.types[iso] : null;
-    cell.className = 'cell' + (d > t ? ' none' : st.set.has(iso) ? ' on' : '') + (iso === todayStr ? ' today' : '')
+    const missed = missedDays.has(iso);                  // light red: figure logged, goal not reached
+    cell.className = 'cell' + (d > t ? ' none' : st.set.has(iso) ? ' on' : missed ? ' miss' : '') + (iso === todayStr ? ' today' : '')
                    + (type && TYPE_CODE[type] ? ' t-' + type : '');
     if (type && TYPE_CODE[type]) cell.textContent = TYPE_CODE[type];
-    cell.title = dayLabel(iso) + (type ? ' – ' + type : '');
+    cell.title = dayLabel(iso) + (type ? ' – ' + type : (h.values && h.values[iso] ? ' – ' + h.values[iso] : ''));
     heat.appendChild(cell);
   }
-  $('hdHeatKey').textContent = typed ? 'Ps = Push · Pl = Pull · L = Legs · Mx = Mixed (grey)' : '';
+  $('hdHeatKey').textContent = typed ? 'Ps = Push · Pl = Pull · L = Legs · Mx = Mixed (grey)'
+                             : missedDays.size ? 'Light red = logged but below goal' : '';
   if (typed) heat.scrollLeft = heat.scrollWidth;       // start scrolled to this week
 
   // log: newest first. Manual ticks get an editable note.
   const log = $('hdLog'); log.textContent = '';
   const rows = st.entries.filter(e => !(e.date === todayStr && !e.synced));   // today's own tick lives in the box above
+  // days with a figure from the sheet but below goal (shown light red); today is left out as it is still in progress
+  missedDays.forEach(d => { if (d !== todayStr) rows.push({ date: d, row: null, note: '', synced: true, miss: true }); });
+  rows.sort((a, b) => b.date.localeCompare(a.date));
   if (!rows.length) { const p = document.createElement('div'); p.className = 'meta'; p.textContent = 'Nothing logged yet.'; log.appendChild(p); }
   rows.slice(0, logShown).forEach(e => {
-    const r = document.createElement('div'); r.className = 'logrow';
+    const r = document.createElement('div'); r.className = 'logrow' + (e.miss ? ' miss' : '');
     r.innerHTML = '<span class="d"></span><span class="body"></span>';
     r.querySelector('.d').textContent = dayLabel(e.date) + (e.partial ? ` · ${e.count}/${h.daily_target}` : '');
     const body = r.querySelector('.body');

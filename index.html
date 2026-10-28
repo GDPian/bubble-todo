@@ -43,9 +43,10 @@
 
   /* ---------- Page layout ---------- */
   .app { max-width: 1200px; margin: 0 auto; display: grid; gap: 12px; grid-template-columns: 1fr; }
-  header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  .head-right { display: flex; align-items: center; gap: 8px; }
-  #who { font-size: .75rem; color: var(--muted); max-width: 40vw; overflow: hidden;
+  header { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .head-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  #btnRefresh { font-size: 1.1rem !important; line-height: 1; padding: 4px 10px !important; }
+  #who { font-size: .75rem; color: var(--muted); max-width: 30vw; overflow: hidden;
          text-overflow: ellipsis; white-space: nowrap; }
   h1 { font-size: 1.2rem; margin: 0; }
   .panel { background: var(--panel); border: 1px solid var(--panel-border);
@@ -244,6 +245,7 @@
     <h1>🫧 Bubbles</h1>
     <div class="head-right">
       <span id="who"></span>
+      <button class="btn ghost small" id="btnRefresh" title="Reload the app (gets the newest version and data)" aria-label="Refresh">↻</button>
       <button class="btn ghost small" id="btnSignOut">Sign out</button>
       <button class="btn" id="toggleForm">+ Add task</button>
     </div>
@@ -779,6 +781,10 @@ $('btnSignUp').addEventListener('click', async () => {
 });
 
 $('btnSignOut').addEventListener('click', () => sb.auth.signOut());
+
+// Refresh button: a full reload of the page. On an iPhone home-screen app there is no browser
+// refresh button, and a full reload also picks up any new version of the app itself.
+$('btnRefresh').addEventListener('click', () => { $('btnRefresh').disabled = true; location.reload(); });
 
 function onSession(session) {
   if (session) {

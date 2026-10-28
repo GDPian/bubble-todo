@@ -1,0 +1,1231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bubbles</title>
+<!-- viewport-fit=cover lets the app use the full iPhone screen (notch area) -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+
+<!-- These tags make the page behave like an app when added to the iOS home screen -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Bubbles">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0f172a">
+<!-- The home screen icon is drawn by the script at the bottom of the page -->
+<link rel="apple-touch-icon" id="touchIcon" href="">
+
+<!-- Supabase client library (handles login + the cloud database) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+<style>
+  /* ---------- Colours and basic setup ---------- */
+  :root {
+    --bg: #0f172a;          /* page background */
+    --panel: #1e293b;       /* box background */
+    --panel-border: #334155;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --work: #3b82f6;        /* work bubbles = blue */
+    --personal: #f59e0b;    /* personal bubbles = amber */
+    --error: #f87171;
+    --ok: #34d399;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body {
+    /* keep content clear of the iPhone notch and home bar */
+    padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+             max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* ---------- Page layout ---------- */
+  .app { max-width: 1200px; margin: 0 auto; display: grid; gap: 12px; grid-template-columns: 1fr; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .head-right { display: flex; align-items: center; gap: 8px; }
+  #who { font-size: .75rem; color: var(--muted); max-width: 40vw; overflow: hidden;
+         text-overflow: ellipsis; white-space: nowrap; }
+  h1 { font-size: 1.2rem; margin: 0; }
+  .panel { background: var(--panel); border: 1px solid var(--panel-border);
+           border-radius: 14px; padding: 12px; }
+  .panel h2, .sheet h2 { margin: 0 0 8px; font-size: .75rem; letter-spacing: .08em;
+              text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .panel-head h2 { margin: 0; }
+  .small { padding: 4px 10px !important; font-size: .75rem !important; }
+
+  /* Signed-in vs signed-out: the body class decides what is visible */
+  #authView, #setupView { display: none; }
+  body.signedout #authView { display: block; }
+  body.signedout #appView { display: none; }
+  body.needsetup #setupView { display: block; }
+  body.needsetup #authView, body.needsetup #appView { display: none; }
+
+  #authView, #setupView { max-width: 380px; margin: 8vh auto 0; }
+  #authForm { display: grid; gap: 10px; }
+  #authForm label { display: flex; flex-direction: column; gap: 4px; font-size: .75rem; color: var(--muted); }
+  .row { display: flex; gap: 8px; }
+  .row .btn { flex: 1; }
+  .msg { font-size: .8rem; min-height: 1.1em; color: var(--muted); }
+  .msg.err { color: var(--error); }
+  #appMsg { margin: 0; }
+
+  /* Placeholder boxes: dashed border so they look "not built yet" */
+  .placeholder { border-style: dashed; color: var(--muted); }
+  .placeholder .ph-body { display: flex; align-items: center; justify-content: center;
+                          text-align: center; font-size: .85rem; opacity: .7; }
+  #calendar .ph-body { min-height: 180px; }
+
+  /* ---------- Habits strip ---------- */
+  #habitStrip { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 84px; }
+  .habit { --c: #a78bfa; border-radius: 50%; border: 2px solid transparent; color: #0f172a;
+           display: flex; flex-direction: column; align-items: center; justify-content: center;
+           padding: 4px; text-align: center; line-height: 1.1; font-size: 10.5px; overflow: hidden;
+           background: radial-gradient(circle at 30% 25%, rgba(255,255,255,.4), var(--c));
+           box-shadow: inset 0 -5px 10px rgba(0,0,0,.2);
+           transition: width .3s, height .3s, background .3s; }
+  .habit.fun    { --c: #a78bfa; }   /* purple = the fun daily games */
+  .habit.health { --c: #34d399; }   /* green  = steps, gym, water, weight */
+  .habit.career { --c: #f472b6; }   /* pink   = job search */
+  .habit .n { font-weight: 700; overflow-wrap: anywhere; }
+  .habit .l { margin-top: 2px; font-size: .9em; opacity: .85; white-space: nowrap; }
+  .habit.done { background: transparent; box-shadow: none; border-color: var(--c); color: var(--c); }
+  .habit.capped { animation: pulse 1.4s ease-in-out infinite; outline: 3px solid rgba(239,68,68,.8); }
+  .habit { position: relative; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .habit .n, .habit .l { pointer-events: none; }
+  /* being re-ordered: picked up (long-press on a phone), dragged, and the spot it will drop into */
+  .habit.lifted { transform: scale(1.06); }
+  .habit.dragging { transition: none; z-index: 5; box-shadow: 0 8px 20px rgba(0,0,0,.5); }
+  .habit.drop { outline: 2px dashed var(--c); outline-offset: 3px; }
+
+  /* Main area: bubble field on the left, side panels on the right (wide screens only) */
+  #appView { display: none; gap: 12px; grid-template-columns: 1fr; }
+  body:not(.signedout):not(.needsetup) #appView { display: grid; }
+  .main { display: grid; gap: 12px; grid-template-columns: 1fr; }
+  .side { display: grid; gap: 12px; align-content: start; }
+  @media (min-width: 900px) { .main { grid-template-columns: 1fr 340px; } }
+
+  /* ---------- Buttons and forms ---------- */
+  button { font: inherit; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .btn { background: var(--work); color: #fff; border: 0; border-radius: 10px;
+         padding: 8px 14px; font-weight: 600; }
+  .btn.good { background: #059669; }
+  .btn.ghost { background: transparent; border: 1px solid var(--panel-border); color: var(--muted); }
+  .btn.danger { background: transparent; border: 1px solid #7f1d1d; color: var(--error); }
+  .fgrid { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
+  .fgrid label { display: flex; flex-direction: column; gap: 4px; font-size: .75rem; color: var(--muted); }
+  .fgrid .wide { grid-column: 1 / -1; }
+  #addForm { display: none; margin-bottom: 10px; }
+  #addForm.open { display: grid; }
+  /* font-size 16px stops iOS from zooming in when you tap a field */
+  input, select, textarea { font: inherit; font-size: 16px; padding: 8px; border-radius: 8px; width: 100%;
+                  border: 1px solid var(--panel-border); background: var(--bg); color: var(--text); }
+  input[type=range] { padding: 0; }
+  .form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* ---------- The bubble field ---------- */
+  #field { position: relative; height: 62vh; min-height: 420px; max-height: 640px;
+           overflow: hidden; border-radius: 12px; background:
+           linear-gradient(to bottom, rgba(239,68,68,.10), rgba(0,0,0,0) 35%, rgba(0,0,0,0) 100%); }
+  .axis { position: absolute; left: 8px; font-size: .65rem; color: var(--muted);
+          opacity: .6; pointer-events: none; text-transform: uppercase; letter-spacing: .08em; }
+  .axis.top { top: 6px; } .axis.bottom { bottom: 6px; }
+  .empty { position: absolute; inset: 0; display: none; align-items: center;
+           justify-content: center; color: var(--muted); }
+  .dragtip { position: absolute; top: 8px; right: 8px; background: rgba(15,23,42,.9); border: 1px solid var(--panel-border);
+             border-radius: 8px; padding: 4px 8px; font-size: .8rem; z-index: 10; pointer-events: none; }
+  .dragtip[hidden] { display: none; }
+
+  .bubble { position: absolute; border-radius: 50%; border: 0; color: #fff;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            padding: 6px; text-align: center; line-height: 1.15;
+            -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+            box-shadow: inset 0 -6px 14px rgba(0,0,0,.25), inset 0 6px 14px rgba(255,255,255,.25);
+            transition: left .4s, top .4s, width .4s, height .4s; }
+  .bubble.work     { background: radial-gradient(circle at 30% 25%, #93c5fd, var(--work)); }
+  .bubble.personal { background: radial-gradient(circle at 30% 25%, #fde68a, var(--personal)); color: #3b2a05; }
+  .bubble .t { font-weight: 700; overflow: hidden; display: -webkit-box;
+               -webkit-box-orient: vertical; -webkit-line-clamp: 3; word-break: break-word; pointer-events: none; }
+  .bubble .d { opacity: .85; margin-top: 2px; font-size: .7em; white-space: nowrap; pointer-events: none; }
+  .bubble.overdue { animation: pulse 1.4s ease-in-out infinite; outline: 3px solid rgba(239,68,68,.8); }
+  @keyframes pulse { 50% { filter: brightness(1.25); } }
+  /* picked up (long-press on a phone) and being dragged */
+  .bubble.lifted { transform: scale(1.06); filter: brightness(1.1); }
+  .bubble.dragging { transition: none; z-index: 5; transform: scale(1.06); cursor: grabbing;
+                     box-shadow: 0 8px 20px rgba(0,0,0,.5), inset 0 -6px 14px rgba(0,0,0,.25), inset 0 6px 14px rgba(255,255,255,.25); }
+
+  /* Pop animation: swell up, then vanish */
+  .bubble.pop { animation: pop .35s ease-out forwards; pointer-events: none; transition: none; }
+  @keyframes pop {
+    0%   { transform: scale(1);    opacity: 1; }
+    40%  { transform: scale(1.25); opacity: 1; }
+    100% { transform: scale(1.6);  opacity: 0; }
+  }
+
+  .legend { display: flex; gap: 14px; font-size: .75rem; color: var(--muted); margin-top: 8px; flex-wrap: wrap; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; flex: none; }
+  .dot.work { background: var(--work); } .dot.personal { background: var(--personal); }
+
+  /* ---------- To-do list + completed ---------- */
+  #todoList, #doneList { display: grid; gap: 6px; max-height: 340px; overflow: auto; }
+  .todo { display: flex; align-items: center; gap: 8px; background: var(--bg); width: 100%;
+          border: 1px solid var(--panel-border); border-radius: 10px; padding: 9px 10px;
+          text-align: left; color: var(--text); }
+  .todo .dot { margin: 0; }
+  .todo .tt { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .todo .dd { font-size: .72rem; color: var(--muted); white-space: nowrap; }
+  .todo .imp { font-size: .7rem; color: var(--muted); border: 1px solid var(--panel-border);
+               border-radius: 6px; padding: 1px 5px; white-space: nowrap; }
+  .small-select { width: auto; padding: 4px 6px; }
+  .todo.overdue .dd { color: var(--error); }
+  .donerow { display: flex; align-items: center; gap: 8px; padding: 6px 2px; font-size: .85rem; color: var(--muted); }
+  .donerow .tt { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: line-through; }
+  details summary { cursor: pointer; font-size: .75rem; letter-spacing: .08em; text-transform: uppercase;
+                    color: var(--muted); font-weight: 600; }
+  details[open] summary { margin-bottom: 8px; }
+
+  /* ---------- Pop-up cards (task detail, habit settings) ---------- */
+  .overlay { position: fixed; inset: 0; background: rgba(2,6,23,.75); display: flex; z-index: 50;
+             align-items: flex-end; justify-content: center; }
+  .overlay[hidden] { display: none; }
+  .sheet { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 16px 16px 0 0;
+           width: 100%; max-width: 520px; max-height: 92vh; overflow: auto; padding: 16px;
+           padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+  .sheet.big { max-width: 780px; }
+  @media (min-width: 700px) { .overlay { align-items: center; } .sheet { border-radius: 16px; } }
+  .sheet-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .sheet-head h2 { margin: 0; }
+  .meta { font-size: .8rem; color: var(--muted); }
+  /* habit settings rows */
+  .hm-row { display: grid; gap: 8px; grid-template-columns: 1fr 1fr 1fr; padding: 10px 0;
+            border-top: 1px solid var(--panel-border); }
+  .hm-row label { display: flex; flex-direction: column; gap: 3px; font-size: .7rem; color: var(--muted); }
+  .hm-row .span2 { grid-column: span 2; } .hm-row .span3 { grid-column: 1 / -1; }
+  .hm-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; grid-column: 1 / -1; }
+  .hm-row.off { opacity: .45; }
+  @media (max-width: 520px) { .hm-row { grid-template-columns: 1fr 1fr; } .hm-row .span2 { grid-column: 1 / -1; } }
+</style>
+</head>
+
+<body class="signedout">
+
+<!-- ============ Shown if the Supabase keys have not been pasted in yet ============ -->
+<section class="panel" id="setupView">
+  <h2>Setup needed</h2>
+  <p>Open this file in a text editor and paste your Supabase project URL and publishable key
+     into <code>SUPABASE_URL</code> and <code>SUPABASE_KEY</code> near the top of the script.</p>
+</section>
+
+<!-- ============ Login screen ============ -->
+<section class="panel" id="authView">
+  <h2>🫧 Bubbles – sign in</h2>
+  <form id="authForm">
+    <label>Email
+      <input id="aEmail" type="email" autocomplete="username" required>
+    </label>
+    <label>Password
+      <input id="aPass" type="password" autocomplete="current-password" minlength="8" required>
+    </label>
+    <div class="row">
+      <button class="btn" type="submit" id="btnSignIn">Sign in</button>
+      <button class="btn ghost" type="button" id="btnSignUp">Create account</button>
+    </div>
+    <div class="msg" id="authMsg"></div>
+  </form>
+</section>
+
+<!-- ============ The app itself (only visible when signed in) ============ -->
+<div class="app" id="appView">
+
+  <header>
+    <h1>🫧 Bubbles</h1>
+    <div class="head-right">
+      <span id="who"></span>
+      <button class="btn ghost small" id="btnSignOut">Sign out</button>
+      <button class="btn" id="toggleForm">+ Add task</button>
+    </div>
+  </header>
+
+  <!-- HABITS STRIP -->
+  <section class="panel" id="habits">
+    <div class="panel-head">
+      <h2>Habits <span id="habitSummary" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2>
+      <button class="btn ghost small" id="btnHabitSettings">⚙ Settings</button>
+    </div>
+    <div id="habitStrip"></div>
+    <div class="msg err" id="habitMsg"></div>
+    <div class="msg">Tap to tick off · tap again to undo · bubbles grow when you fall behind</div>
+  </section>
+
+  <div class="main">
+    <!-- THE BUBBLE SCREEN -->
+    <section class="panel" id="bubblePanel">
+      <!-- Add-task form (hidden until you press "+ Add task") -->
+      <form id="addForm" class="fgrid" autocomplete="off">
+        <label class="wide">Title
+          <input id="fTitle" required maxlength="60" placeholder="e.g. Send CV to recruiter">
+        </label>
+        <label>Due date
+          <input id="fDue" type="date" required>
+        </label>
+        <label>Tag
+          <select id="fTag">
+            <option value="work">Work</option>
+            <option value="personal">Personal</option>
+          </select>
+        </label>
+        <label class="wide">Importance: <span id="fImpVal">5</span> / 10
+          <input id="fImp" type="range" min="1" max="10" value="5">
+        </label>
+        <div class="wide form-actions">
+          <button class="btn" type="submit" id="btnAdd">Add</button>
+          <button class="btn ghost" type="button" id="cancelForm">Cancel</button>
+        </div>
+      </form>
+
+      <div class="msg err" id="appMsg"></div>
+
+      <div id="field">
+        <span class="axis top">More important</span>
+        <span class="axis bottom">Less important</span>
+        <div class="empty" id="empty">Loading…</div>
+        <div class="dragtip" id="dragTip" hidden></div>
+      </div>
+
+      <div class="legend">
+        <span><span class="dot work"></span>Work</span>
+        <span><span class="dot personal"></span>Personal</span>
+        <span>Higher = more important · Bigger = due sooner · Tap for details · Drag up/down to change importance (press and hold first on a phone)</span>
+        <button class="btn ghost small" id="resetData" style="margin-left:auto">Reset to sample data</button>
+      </div>
+    </section>
+
+    <div class="side">
+      <!-- TO-DO LIST: the same tasks as the bubbles, in list form -->
+      <section class="panel" id="todo">
+        <div class="panel-head">
+          <h2>To-do list <span id="todoCount" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2>
+          <select id="todoSort" class="small-select" aria-label="Sort the to-do list">
+            <option value="importance">By importance</option>
+            <option value="due">By due date</option>
+          </select>
+        </div>
+        <div id="todoList"></div>
+      </section>
+
+      <!-- COMPLETED: so a mistaken tap can be undone -->
+      <section class="panel" id="doneBox">
+        <details>
+          <summary>Completed (last 30 days) <span id="doneCount"></span></summary>
+          <div id="doneList"></div>
+        </details>
+      </section>
+
+      <!-- PLACEHOLDER: calendar (no functionality yet) -->
+      <section class="panel placeholder" id="calendar">
+        <h2>Calendar</h2>
+        <div class="ph-body">Placeholder – work + personal calendar</div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Task detail card ============ -->
+<div class="overlay" id="detailOverlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="Task details">
+    <form id="detailForm" class="fgrid" autocomplete="off">
+      <div class="wide sheet-head"><h2>Task</h2><span class="meta" id="dMeta"></span></div>
+      <label class="wide">Title
+        <input id="dTitle" required maxlength="60">
+      </label>
+      <label>Due date
+        <input id="dDue" type="date" required>
+      </label>
+      <label>Tag
+        <select id="dTag">
+          <option value="work">Work</option>
+          <option value="personal">Personal</option>
+        </select>
+      </label>
+      <label class="wide">Importance: <span id="dImpVal"></span> / 10
+        <input id="dImp" type="range" min="1" max="10">
+      </label>
+      <label class="wide">Notes
+        <textarea id="dNotes" rows="4" maxlength="2000" placeholder="How-to notes, links, anything that makes it easier to start"></textarea>
+      </label>
+      <div class="wide form-actions">
+        <button class="btn good" type="button" id="dComplete">✓ Complete</button>
+        <button class="btn" type="submit" id="dSave">Save</button>
+        <button class="btn danger" type="button" id="dDelete">Delete</button>
+        <button class="btn ghost" type="button" id="dClose">Close</button>
+      </div>
+      <div class="wide msg err" id="dMsg"></div>
+    </form>
+  </div>
+</div>
+
+<!-- ============ Habit settings ============ -->
+<div class="overlay" id="habitOverlay" hidden>
+  <div class="sheet big" role="dialog" aria-modal="true" aria-label="Habit settings">
+    <div class="sheet-head"><h2>Habit settings</h2><button class="btn ghost small" id="hmClose">Close</button></div>
+    <p class="meta">Daily habits start growing after their <b>grace days</b> are used up (missed days). Weekly habits use a
+      <b>weekly target</b> instead. A <b>sync URL</b> lets a habit tick itself from your Google Sheet.</p>
+    <div id="hmList"></div>
+    <form id="hmAdd" class="hm-row" autocomplete="off">
+      <label class="span3"><b>Add a habit</b></label>
+      <label class="span2">Name <input id="haName" required maxlength="40" placeholder="e.g. Stretch"></label>
+      <label>Type
+        <select id="haCat"><option value="fun">Fun</option><option value="health" selected>Health</option><option value="career">Career</option></select>
+      </label>
+      <label>Repeats
+        <select id="haKind"><option value="daily">Every day</option><option value="weekly">Weekly target</option></select>
+      </label>
+      <label>Grace days <input id="haGrace" type="number" min="0" max="14" value="2"></label>
+      <label>Weekly target <input id="haTarget" type="number" min="1" max="7" value="3"></label>
+      <div class="hm-actions"><button class="btn" type="submit">Add habit</button></div>
+    </form>
+    <div class="msg err" id="hmMsg"></div>
+  </div>
+</div>
+
+<script>
+/* =========================================================
+   Bubbles – step 3
+   Task detail card, completed list, to-do list, drag to change
+   importance, habit settings, and sheet-synced habits.
+   Everything lives in this one file; data lives in Supabase.
+   ========================================================= */
+
+/* ---------- 0. YOUR SETTINGS ---------- */
+// Supabase dashboard > Project Settings > API (publishable key only, never the secret key).
+const SUPABASE_URL = 'https://fcfeulmuvzkrxtkekcsx.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_uZwMtwWb1T0pUu3oZhk_dQ_rCvC1Pp2';
+
+const configured = SUPABASE_URL.startsWith('https://') && !SUPABASE_KEY.startsWith('PASTE');
+const sb = configured ? supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+
+const field = document.getElementById('field');
+const $ = id => document.getElementById(id);
+let tasks = [];            // every task row, active AND completed
+let habits = [];           // rows from the "habits" table
+let logs = [];             // rows from "habit_log" (last 90 days) plus synced ticks
+let currentUser = null;    // who is signed in
+
+/* ---------- 1. Date helpers ---------- */
+
+function today() { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }
+function parseDate(str) { const [y, m, d] = str.split('-').map(Number); return new Date(y, m - 1, d); }
+function toISO(date) {
+  const p = n => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}`;
+}
+function daysLeft(task) { return Math.round((parseDate(task.due) - today()) / 86400000); }
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const delay = ms => new Promise(r => setTimeout(r, ms));
+
+// Fake starter data (no ids – the database makes those). Dates are relative to today.
+function sampleTasks() {
+  const inDays = n => { const d = today(); d.setDate(d.getDate() + n); return toISO(d); };
+  const daysTo = dow => ((dow - today().getDay() + 7) % 7) || 7;   // days until the next Wed (3), Fri (5) …
+  return [
+    { title: 'Book Keiko',              due: inDays(3),               importance: 6, tag: 'personal' },
+    { title: 'Book Friday dinner',      due: inDays(daysTo(5) - 1),   importance: 7, tag: 'personal' },
+    { title: 'Plan Wednesday cooking',  due: inDays(daysTo(3) - 1),   importance: 5, tag: 'personal' },
+    { title: 'Submit Q4 pricing deck',  due: inDays(1),               importance: 9, tag: 'work' },
+    { title: 'Review deal approval',    due: inDays(0),               importance: 8, tag: 'work' },
+    { title: 'Update delegation doc',   due: inDays(10),              importance: 6, tag: 'work' },
+    { title: 'Send expenses',           due: inDays(-1),              importance: 5, tag: 'work' },
+  ];
+}
+
+/* ---------- 2. Cloud data: tasks ---------- */
+// Row-level security in the database means you only ever see your own rows.
+
+function appError(text) { $('appMsg').textContent = text || ''; }
+
+const activeTasks = () => tasks.filter(t => !t.done_at);
+const recentDone = () => tasks
+  .filter(t => t.done_at && Date.now() - new Date(t.done_at) < 30 * 86400000)
+  .sort((a, b) => new Date(b.done_at) - new Date(a.done_at));
+
+async function loadTasks() {
+  const { data, error } = await sb.from('tasks').select('*').order('created_at');
+  if (error) { appError('Could not load tasks: ' + error.message); return; }
+  appError('');
+  tasks = data;
+  render();
+}
+
+async function addTask(t) {
+  const { data, error } = await sb.from('tasks').insert(t).select().single();
+  if (error) { appError('Could not save task: ' + error.message); return false; }
+  tasks.push(data);
+  return true;
+}
+
+// Change some fields of a task: update the screen first, then the cloud; undo the screen if the save fails.
+async function updateTask(id, fields) {
+  const t = tasks.find(x => x.id === id);
+  if (!t) return false;
+  const before = { ...t };
+  Object.assign(t, fields);
+  render();
+  const { error } = await sb.from('tasks').update(fields).eq('id', id);
+  if (error) { Object.assign(t, before); render(); appError('Could not save: ' + error.message); return false; }
+  appError('');
+  return true;
+}
+
+async function deleteTask(id) {
+  const keep = tasks;
+  tasks = tasks.filter(t => t.id !== id);
+  render();
+  const { error } = await sb.from('tasks').delete().eq('id', id);
+  if (error) { tasks = keep; render(); appError('Could not delete: ' + error.message); }
+}
+
+// Complete = pop animation, then mark done (kept in the Completed list, not deleted)
+async function completeTask(id, fields) {
+  const el = [...field.querySelectorAll('.bubble')].find(b => b.dataset.id === id);
+  if (el) { el.classList.add('pop'); await delay(330); }
+  await updateTask(id, { ...fields, done_at: new Date().toISOString() });
+}
+
+async function resetToSample() {
+  let r = await sb.from('tasks').delete().not('id', 'is', null);
+  if (r.error) { appError('Reset failed: ' + r.error.message); return; }
+  r = await sb.from('tasks').insert(sampleTasks());
+  if (r.error) { appError('Reset failed: ' + r.error.message); return; }
+  await loadTasks();
+}
+
+/* ---------- 2b. Cloud data: habits ---------- */
+// Tables: "habits" (the list) and "habit_log" (one row per habit per day done).
+// Streaks and growth are worked out here from the log, not stored.
+
+const HABIT_DEFAULTS = [
+  { name: 'Minute Cryptic', category: 'fun',    kind: 'daily',  target_per_week: 7, sort_order: 1 },
+  { name: 'Wordle',         category: 'fun',    kind: 'daily',  target_per_week: 7, sort_order: 2 },
+  { name: 'Worldle',        category: 'fun',    kind: 'daily',  target_per_week: 7, sort_order: 3 },
+  { name: 'Connections',    category: 'fun',    kind: 'daily',  target_per_week: 7, sort_order: 4 },
+  { name: '10k steps',      category: 'health', kind: 'daily',  target_per_week: 7, sort_order: 5 },
+  { name: 'Send a CV',      category: 'career', kind: 'daily',  target_per_week: 7, sort_order: 6 },
+  { name: 'Go to the gym',  category: 'health', kind: 'weekly', target_per_week: 3, sort_order: 7 },
+  { name: 'Drink water',    category: 'health', kind: 'daily',  target_per_week: 7, sort_order: 8 },
+  { name: 'Weigh in',       category: 'health', kind: 'daily',  target_per_week: 7, sort_order: 9 },
+];
+
+const HABIT_BASE = 76;   // normal bubble size (px)
+const HABIT_DONE = 68;   // size once ticked off today
+const HABIT_STEP = 5;    // extra px per "growth step"
+const HABIT_CAP = 6;     // after this many steps: stop growing and pulse instead
+
+function habitError(text) { $('habitMsg').textContent = text || ''; }
+
+async function loadHabits() {
+  let r = await sb.from('habits').select('*').order('sort_order');
+  if (r.error) { habitError('Could not load habits: ' + r.error.message); return; }
+  if (r.data.length === 0) {
+    // First run: add starter habits. The unique (owner, name) rule stops duplicates if two devices race.
+    const up = await sb.from('habits').upsert(HABIT_DEFAULTS, { onConflict: 'owner,name', ignoreDuplicates: true });
+    if (up.error) { habitError('Could not add starter habits: ' + up.error.message); return; }
+    r = await sb.from('habits').select('*').order('sort_order');
+    if (r.error) { habitError('Could not load habits: ' + r.error.message); return; }
+  }
+  habits = r.data;
+
+  const since = new Date(today()); since.setDate(since.getDate() - 90);
+  const l = await sb.from('habit_log').select('id,habit_id,done_on').gte('done_on', toISO(since));
+  if (l.error) { habitError('Could not load habit history: ' + l.error.message); return; }
+  logs = l.data;
+  habitError('');
+  renderHabits();
+
+  // Habits with a sync URL tick themselves from the Google Sheet. Done after the first
+  // draw so a slow sheet never delays the screen.
+  if (habits.some(h => h.source_url)) {
+    await Promise.all(habits.map(syncHabit));
+    renderHabits();
+  }
+  if (!$('habitOverlay').hidden) renderHabitSettings();
+}
+
+// Ask the sheet's web link for the dates this habit was done (and the latest value, e.g. weight)
+async function syncHabit(h) {
+  if (!h.source_url || !h.source_url.startsWith('https://')) return;
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);
+    const res = await fetch(h.source_url, { signal: ctl.signal });
+    clearTimeout(timer);
+    const j = await res.json();
+    if (j.error) throw new Error(j.error);
+    h.latest = (j.latest && typeof j.latest.value === 'number') ? j.latest : null;
+    const have = new Set(logs.filter(l => l.habit_id === h.id).map(l => l.done_on));
+    (j.dates || []).forEach(d => {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d) && !have.has(d)) {
+        logs.push({ id: 'sync-' + h.id + d, habit_id: h.id, done_on: d, synced: true });
+      }
+    });
+    h.syncError = false;
+  } catch (e) { h.syncError = true; }
+}
+
+function loadAll() { return Promise.all([loadTasks(), loadHabits()]); }
+
+// How should a habit look right now: growth steps, label, and whether it counts as done.
+function habitState(h) {
+  const t = today(), todayStr = toISO(t);
+  const dates = new Set(logs.filter(l => l.habit_id === h.id).map(l => l.done_on));
+  const doneToday = dates.has(todayStr);
+  let steps = 0, label = '', done = doneToday;
+
+  if (h.kind === 'weekly') {
+    // Weekly target (e.g. gym 3x). Week runs Monday–Sunday.
+    const idx = (t.getDay() + 6) % 7;                       // Mon = 0 … Sun = 6
+    const monday = new Date(t); monday.setDate(t.getDate() - idx);
+    const mondayStr = toISO(monday);
+    let count = 0; dates.forEach(d => { if (d >= mondayStr) count++; });
+    const remaining = Math.max(0, h.target_per_week - count);
+    const daysLeftInWeek = 7 - idx - (doneToday ? 1 : 0);   // days still available to do it
+    const slack = daysLeftInWeek - remaining;               // days you can still afford to skip
+    if (!doneToday && remaining > 0) steps = Math.max(0, 2 - slack);
+    done = doneToday || remaining === 0;                    // target met = calm, even if not today
+    label = `${count}/${h.target_per_week}`;
+  } else {
+    // Daily habit: grows after grace_days fully missed days.
+    let last = null; dates.forEach(d => { if (!last || d > last) last = d; });
+    const created = toISO(new Date(h.created_at));          // a new habit counts as "done" on day one
+    if (!last || created > last) last = created;
+    const daysSince = Math.round((t - parseDate(last)) / 86400000);
+    const missed = Math.max(0, daysSince - 1);              // full days missed
+    if (!doneToday) steps = Math.max(0, missed - h.grace_days);
+
+    let streak = 0; const cursor = new Date(t);
+    if (!doneToday) cursor.setDate(cursor.getDate() - 1);
+    while (dates.has(toISO(cursor))) { streak++; cursor.setDate(cursor.getDate() - 1); }
+    label = streak >= 2 ? '🔥' + streak : (steps > 0 ? missed + 'd missed' : '');
+    // Synced habits with a value (weight) show the latest reading instead
+    if (h.latest) label = h.latest.value.toFixed(1) + (h.latest.unit || '');
+  }
+  if (h.syncError) label = '⚠ sync';
+  return { steps, label, done };
+}
+
+function renderHabits() {
+  if (!currentUser) return;
+  const strip = $('habitStrip');
+  strip.textContent = '';
+  let doneCount = 0;
+  habits.forEach(h => {
+    const s = habitState(h);
+    if (s.done) doneCount++;
+    const capped = !s.done && s.steps >= HABIT_CAP;
+    const size = s.done ? HABIT_DONE : HABIT_BASE + Math.min(s.steps, HABIT_CAP) * HABIT_STEP;
+    const b = document.createElement('button');
+    b.className = `habit ${h.category}` + (s.done ? ' done' : '') + (capped ? ' capped' : '');
+    b.style.width = b.style.height = size + 'px';
+    b.title = h.name;
+    b.innerHTML = '<span class="n"></span><span class="l"></span>';
+    b.querySelector('.n').textContent = h.name;
+    b.querySelector('.l').textContent = (s.done ? '✓ ' : '') + s.label;
+    b.addEventListener('click', () => { if (!habitDragJustEnded) toggleHabit(h); });
+    attachHabitDrag(b, h);
+    strip.appendChild(b);
+  });
+  $('habitSummary').textContent = habits.length ? `· ${doneCount} of ${habits.length} done` : '';
+}
+
+// Drag a habit bubble to a new place in the strip to re-order it (phone: press and hold first).
+let habitDragJustEnded = false;   // stops the tap that ends a drag from also ticking the habit
+
+function attachHabitDrag(b, h) {
+  const strip = $('habitStrip');
+  let st = null;
+  const clearDrop = () => strip.querySelectorAll('.drop').forEach(e => e.classList.remove('drop'));
+  const reset = () => {
+    if (st) clearTimeout(st.timer);
+    st = null;
+    b.classList.remove('lifted', 'dragging');
+    b.style.transform = '';
+    clearDrop();
+  };
+  // which other habit bubble is closest to the pointer?
+  const nearest = (x, y) => {
+    let best = null, bestD = Infinity;
+    [...strip.children].forEach((el, idx) => {
+      if (el === b) return;
+      const r = el.getBoundingClientRect();
+      const d = Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2));
+      if (d < bestD) { bestD = d; best = { el, idx }; }
+    });
+    return best;
+  };
+
+  b.addEventListener('contextmenu', e => e.preventDefault());
+
+  b.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    const isTouch = e.pointerType === 'touch';
+    st = { id: e.pointerId, sx: e.clientX, sy: e.clientY, armed: !isTouch, dragging: false, timer: null };
+    if (isTouch) st.timer = setTimeout(() => { if (st) { st.armed = true; b.classList.add('lifted'); } }, 220);
+    try { b.setPointerCapture(e.pointerId); } catch (_) {}
+  });
+
+  b.addEventListener('pointermove', e => {
+    if (!st || e.pointerId !== st.id) return;
+    const dx = e.clientX - st.sx, dy = e.clientY - st.sy;
+    if (!st.dragging) {
+      if (Math.hypot(dx, dy) < 6) return;
+      if (!st.armed) { reset(); return; }          // moved before the hold finished: let the page scroll
+      st.dragging = true;
+      b.classList.add('dragging');
+    }
+    b.style.transform = `translate(${dx}px, ${dy}px) scale(1.08)`;
+    clearDrop();
+    const near = nearest(e.clientX, e.clientY);
+    if (near) near.el.classList.add('drop');
+  });
+
+  b.addEventListener('pointerup', e => {
+    if (!st || e.pointerId !== st.id) return;
+    const wasDrag = st.dragging;
+    const near = wasDrag ? nearest(e.clientX, e.clientY) : null;
+    reset();
+    if (!wasDrag) return;                           // a plain tap: the click handler ticks it
+    habitDragJustEnded = true;
+    setTimeout(() => { habitDragJustEnded = false; }, 350);
+    const from = habits.indexOf(h);
+    if (near && from >= 0 && near.idx !== from) reorderHabits(from, near.idx);
+  });
+
+  b.addEventListener('pointercancel', () => { if (st) reset(); });
+}
+
+// While a habit is held or dragged on a touch screen, stop the page scrolling under the finger
+$('habitStrip').addEventListener('touchmove', e => {
+  if ($('habitStrip').querySelector('.habit.lifted, .habit.dragging')) e.preventDefault();
+}, { passive: false });
+
+// Move the habit at position `from` to position `to`, update the screen first, then save the new order
+async function reorderHabits(from, to) {
+  if (from === to || from < 0 || to < 0 || from >= habits.length || to >= habits.length) return;
+  const arr = [...habits];
+  const [moved] = arr.splice(from, 1);
+  arr.splice(to, 0, moved);
+  const changed = arr.filter((h, k) => h.sort_order !== k + 1);
+  arr.forEach((h, k) => { h.sort_order = k + 1; });
+  habits = arr;
+  renderHabits();
+  const results = await Promise.all(changed.map(h => sb.from('habits').update({ sort_order: h.sort_order }).eq('id', h.id)));
+  const failed = results.find(r => r && r.error);
+  if (failed) { await loadHabits(); habitError('Could not save the new order: ' + failed.error.message); return; }
+  if (!$('habitOverlay').hidden) renderHabitSettings();
+}
+
+// Tick a habit off for today, or undo it (screen updates first, saves in the background)
+async function toggleHabit(h) {
+  if (h.busy) return;
+  const todayStr = toISO(today());
+  const existing = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && !l.synced);
+  const synced = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && l.synced);
+  if (!existing && synced) { habitError('"' + h.name + '" ticked itself from your sheet today.'); return; }
+  h.busy = true;
+  let problem = '';
+  if (existing) {
+    logs = logs.filter(l => l !== existing);
+    renderHabits();
+    const { error } = await sb.from('habit_log').delete().eq('habit_id', h.id).eq('done_on', todayStr);
+    if (error) problem = 'Could not undo: ' + error.message;
+  } else {
+    const temp = { id: 'tmp-' + Date.now(), habit_id: h.id, done_on: todayStr };
+    logs.push(temp);
+    renderHabits();
+    const { data, error } = await sb.from('habit_log')
+      .insert({ habit_id: h.id, done_on: todayStr }).select('id,habit_id,done_on').single();
+    if (error) problem = 'Could not save: ' + error.message;
+    else Object.assign(temp, data);
+  }
+  if (problem) { await loadHabits(); habitError(problem); }
+  else habitError('');
+  h.busy = false;
+}
+
+/* ---------- 3. Login ---------- */
+const aEmail = $('aEmail');
+const aPass = $('aPass');
+const authMsg = $('authMsg');
+
+function authText(text, isError) { authMsg.textContent = text || ''; authMsg.className = 'msg' + (isError ? ' err' : ''); }
+
+$('authForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  authText('Signing in…');
+  const { error } = await sb.auth.signInWithPassword({ email: aEmail.value.trim(), password: aPass.value });
+  if (error) authText(error.message, true);   // on success, onAuthStateChange takes over
+});
+
+$('btnSignUp').addEventListener('click', async () => {
+  if (!aEmail.value.trim() || aPass.value.length < 8) {
+    authText('Enter an email and a password of at least 8 characters.', true); return;
+  }
+  authText('Creating account…');
+  const { data, error } = await sb.auth.signUp({ email: aEmail.value.trim(), password: aPass.value });
+  if (error) { authText(error.message, true); return; }
+  if (!data.session) authText('Account created. Check your email to confirm it, then sign in.');
+});
+
+$('btnSignOut').addEventListener('click', () => sb.auth.signOut());
+
+function onSession(session) {
+  if (session) {
+    currentUser = session.user;
+    document.body.classList.remove('signedout');
+    $('who').textContent = currentUser.email;
+    authText('');
+    aPass.value = '';
+    loadAll();
+  } else {
+    currentUser = null;
+    tasks = []; habits = []; logs = [];
+    closeDetail(); $('habitOverlay').hidden = true;
+    document.body.classList.add('signedout');
+  }
+}
+
+/* ---------- 4. Size and position rules ---------- */
+
+// Bubble size grows as the due date gets closer: 30+ days away = smallest, due now or overdue = biggest.
+function bubbleSize(task) {
+  const MIN = 62, MAX = 140;
+  const scale = Math.min(1, field.clientWidth / 600);   // shrink a little on narrow phones
+  const days = clamp(daysLeft(task), 0, 30);
+  const closeness = 1 - days / 30;                       // 0 (far away) … 1 (due now)
+  return (MIN + (MAX - MIN) * closeness) * Math.max(0.75, scale);
+}
+
+// A stable pseudo-random number 0–1 from the task id, so a bubble keeps roughly the same horizontal spot.
+function hash01(id) {
+  let h = 0;
+  for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return (h % 10000) / 10000;
+}
+
+// Importance sets the vertical position; a simple "push apart" loop stops overlaps.
+function computeLayout() {
+  const W = field.clientWidth, H = field.clientHeight;
+  const items = activeTasks().map(t => {
+    const size = bubbleSize(t), r = size / 2;
+    const targetY = r + (1 - (t.importance - 1) / 9) * (H - 2 * r);   // importance 10 = top
+    // pos_x (0–1) is where you dragged it sideways; if you never did, spread them out by id
+    const pinned = typeof t.pos_x === 'number';
+    const x = r + (pinned ? t.pos_x : hash01(t.id)) * (W - 2 * r);
+    return { t, r, size, ty: targetY, x, y: targetY, pinned };
+  });
+
+  for (let pass = 0; pass < 120; pass++) {
+    for (let i = 0; i < items.length; i++) {
+      for (let j = i + 1; j < items.length; j++) {
+        const a = items[i], b = items[j];
+        let dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.hypot(dx, dy) || 0.01;
+        const min = a.r + b.r + 4;
+        if (dist < min) {
+          // bubbles you placed yourself resist being pushed; the others move out of the way
+          const wa = a.pinned ? 0.2 : 1, wb = b.pinned ? 0.2 : 1;
+          const gap = min - dist, fa = wa / (wa + wb), fb = wb / (wa + wb);
+          dx /= dist; dy /= dist;
+          a.x -= dx * gap * fa;       b.x += dx * gap * fb;
+          a.y -= dy * gap * 0.4 * fa; b.y += dy * gap * 0.4 * fb;
+        }
+      }
+    }
+    items.forEach(it => {
+      it.y += (it.ty - it.y) * 0.08;
+      it.x = clamp(it.x, it.r, W - it.r);
+      it.y = clamp(it.y, it.r, H - it.r);
+    });
+  }
+  return items;
+}
+
+/* ---------- 5. Drawing ---------- */
+
+function dueLabel(task) {
+  const n = daysLeft(task);
+  if (n < 0)  return `${-n}d overdue`;
+  if (n === 0) return 'Today';
+  if (n === 1) return 'Tomorrow';
+  return parseDate(task.due).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+// Draw everything that shows tasks: the bubbles and both lists
+function render() {
+  if (!currentUser) return;
+  field.querySelectorAll('.bubble').forEach(b => b.remove());
+  const active = activeTasks();
+  const empty = $('empty');
+  empty.textContent = 'All clear 🎉 Add a task to get started';
+  empty.style.display = active.length ? 'none' : 'flex';
+
+  computeLayout().forEach(({ t, r, size, x, y }) => {
+    const b = document.createElement('button');
+    b.className = `bubble ${t.tag}` + (daysLeft(t) < 0 ? ' overdue' : '');
+    b.dataset.id = t.id;
+    b.style.width = b.style.height = size + 'px';
+    b.style.left = (x - r) + 'px';
+    b.style.top  = (y - r) + 'px';
+    b.style.fontSize = Math.max(11, size / 9) + 'px';
+    b.title = `${t.title} – importance ${t.importance}/10`;
+    b.innerHTML = `<span class="t"></span><span class="d"></span>`;
+    b.querySelector('.t').textContent = t.title;      // textContent = safe against odd characters
+    b.querySelector('.d').textContent = dueLabel(t);
+    attachInteractions(b, t);
+    field.appendChild(b);
+  });
+  renderTodo();
+}
+
+// How the to-do list is sorted (remembered on this device)
+let todoSort = 'importance';
+try { todoSort = localStorage.getItem('bubbles.todoSort') || 'importance'; } catch (_) {}
+$('todoSort').value = todoSort;
+$('todoSort').addEventListener('change', () => {
+  todoSort = $('todoSort').value;
+  try { localStorage.setItem('bubbles.todoSort', todoSort); } catch (_) {}
+  renderTodo();
+});
+
+function renderTodo() {
+  const list = $('todoList');
+  list.textContent = '';
+  // Most important first (ties: soonest due), or soonest due first (ties: most important)
+  const byImportance = (a, b) => b.importance - a.importance || a.due.localeCompare(b.due);
+  const byDue = (a, b) => a.due.localeCompare(b.due) || b.importance - a.importance;
+  const active = activeTasks().sort(todoSort === 'due' ? byDue : byImportance);
+  $('todoCount').textContent = active.length ? `· ${active.length}` : '';
+  if (!active.length) { const p = document.createElement('div'); p.className = 'meta'; p.textContent = 'Nothing to do 🎉'; list.appendChild(p); }
+  active.forEach(t => {
+    const row = document.createElement('button');
+    row.className = 'todo' + (daysLeft(t) < 0 ? ' overdue' : '');
+    row.innerHTML = '<span class="dot"></span><span class="tt"></span><span class="imp"></span><span class="dd"></span>';
+    row.querySelector('.dot').classList.add(t.tag);
+    row.querySelector('.tt').textContent = t.title;
+    row.querySelector('.imp').textContent = '★ ' + t.importance;
+    row.querySelector('.dd').textContent = dueLabel(t);
+    row.addEventListener('click', () => openDetail(t.id));
+    list.appendChild(row);
+  });
+
+  const done = recentDone();
+  $('doneCount').textContent = done.length ? `· ${done.length}` : '';
+  const dl = $('doneList');
+  dl.textContent = '';
+  if (!done.length) { const p = document.createElement('div'); p.className = 'meta'; p.textContent = 'Nothing completed yet.'; dl.appendChild(p); }
+  done.forEach(t => {
+    const row = document.createElement('div');
+    row.className = 'donerow';
+    row.innerHTML = '<span class="dot"></span><span class="tt"></span><span class="dd meta"></span><button class="btn ghost small">Restore</button>';
+    row.querySelector('.dot').classList.add(t.tag);
+    row.querySelector('.tt').textContent = t.title;
+    row.querySelector('.dd').textContent = new Date(t.done_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    row.querySelector('button').addEventListener('click', () => updateTask(t.id, { done_at: null }));
+    dl.appendChild(row);
+  });
+}
+
+/* ---------- 6. Bubble interactions: tap = details, drag up/down = importance ---------- */
+
+const dragTip = $('dragTip');
+
+// What importance does a bubble's current top edge correspond to? (inverse of the layout rule)
+function importanceFromTop(top, size) {
+  const H = field.clientHeight;
+  return clamp(Math.round(1 + 9 * (1 - top / Math.max(1, H - size))), 1, 10);
+}
+
+function attachInteractions(b, t) {
+  let st = null;   // state of the current press, or null
+
+  const reset = () => {
+    if (st) clearTimeout(st.timer);
+    st = null;
+    b.classList.remove('lifted', 'dragging');
+    dragTip.hidden = true;
+  };
+
+  b.addEventListener('contextmenu', e => e.preventDefault());
+
+  b.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    const isTouch = e.pointerType === 'touch';
+    st = { id: e.pointerId, sx: e.clientX, sy: e.clientY,
+           left: parseFloat(b.style.left), top: parseFloat(b.style.top),
+           armed: !isTouch, dragging: false, timer: null };
+    // On a phone you must press and hold briefly before dragging, so normal swipes still scroll the page
+    if (isTouch) st.timer = setTimeout(() => { if (st) { st.armed = true; b.classList.add('lifted'); } }, 220);
+    try { b.setPointerCapture(e.pointerId); } catch (_) {}
+  });
+
+  b.addEventListener('pointermove', e => {
+    if (!st || e.pointerId !== st.id) return;
+    const dx = e.clientX - st.sx, dy = e.clientY - st.sy;
+    if (!st.dragging) {
+      if (Math.hypot(dx, dy) < 6) return;
+      if (!st.armed) { reset(); return; }          // moved before the hold finished: let the page scroll
+      st.dragging = true;
+      b.classList.add('dragging');
+    }
+    const size = b.offsetWidth;
+    const left = clamp(st.left + dx, 0, field.clientWidth - size);
+    const top = clamp(st.top + dy, 0, field.clientHeight - size);
+    b.style.left = left + 'px';
+    b.style.top = top + 'px';
+    dragTip.textContent = `Importance ${importanceFromTop(top, size)}`;
+    dragTip.hidden = false;
+  });
+
+  b.addEventListener('pointerup', e => {
+    if (!st || e.pointerId !== st.id) return;
+    const wasDrag = st.dragging;
+    const size = b.offsetWidth, top = parseFloat(b.style.top), left = parseFloat(b.style.left);
+    reset();
+    if (!wasDrag) { openDetail(t.id); return; }    // a tap opens the detail card
+    // Up/down sets importance; left/right is remembered as a 0–1 position across the field
+    const fields = {};
+    const imp = importanceFromTop(top, size);
+    if (imp !== t.importance) fields.importance = imp;
+    const posX = Math.round(clamp(left / Math.max(1, field.clientWidth - size), 0, 1) * 1000) / 1000;
+    if (typeof t.pos_x !== 'number' || Math.abs(t.pos_x - posX) > 0.01) fields.pos_x = posX;
+    if (Object.keys(fields).length) updateTask(t.id, fields);
+    else render();                                  // nothing changed: just snap back into place
+  });
+
+  b.addEventListener('pointercancel', () => { if (st) { reset(); render(); } });
+
+  // Keyboard (Enter / Space) opens the card too. Real taps are handled above, which have click detail > 0.
+  b.addEventListener('click', e => { if (e.detail === 0) openDetail(t.id); });
+}
+
+// While a bubble is held or dragged on a touch screen, stop the page from scrolling under the finger
+field.addEventListener('touchmove', e => {
+  if (field.querySelector('.bubble.lifted, .bubble.dragging')) e.preventDefault();
+}, { passive: false });
+
+/* ---------- 7. Task detail card ---------- */
+let detailId = null;
+const dForm = $('detailForm');
+
+function openDetail(id) {
+  const t = tasks.find(x => x.id === id);
+  if (!t) return;
+  detailId = id;
+  $('dTitle').value = t.title;
+  $('dDue').value = t.due;
+  $('dTag').value = t.tag;
+  $('dImp').value = t.importance;
+  $('dImpVal').textContent = t.importance;
+  $('dNotes').value = t.notes || '';
+  $('dMeta').textContent = t.done_at ? 'Completed' : dueLabel(t);
+  $('dMsg').textContent = '';
+  $('detailOverlay').hidden = false;
+}
+function closeDetail() { detailId = null; $('detailOverlay').hidden = true; }
+
+const detailFields = () => ({
+  title: $('dTitle').value.trim(), due: $('dDue').value, tag: $('dTag').value,
+  importance: Number($('dImp').value), notes: $('dNotes').value,
+});
+
+$('dImp').oninput = () => $('dImpVal').textContent = $('dImp').value;
+$('dClose').onclick = closeDetail;
+$('detailOverlay').addEventListener('click', e => { if (e.target === $('detailOverlay')) closeDetail(); });
+
+dForm.addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = detailFields();
+  if (!f.title || !f.due) return;
+  const id = detailId;
+  closeDetail();
+  await updateTask(id, f);
+});
+
+$('dComplete').onclick = () => {
+  const f = detailFields();
+  if (!f.title || !f.due) { $('dMsg').textContent = 'Title and due date are needed.'; return; }
+  const id = detailId;
+  closeDetail();
+  completeTask(id, f);
+};
+
+$('dDelete').onclick = () => {
+  if (!confirm('Delete this task for good? (Use Complete if you just want it done.)')) return;
+  const id = detailId;
+  closeDetail();
+  deleteTask(id);
+};
+
+/* ---------- 8. Add-task form ---------- */
+const form = $('addForm');
+const fTitle = $('fTitle'), fDue = $('fDue'), fImp = $('fImp'), fTag = $('fTag'), fImpVal = $('fImpVal');
+
+function openForm() { form.classList.add('open'); fDue.value = toISO(today()); fTitle.focus(); }
+function closeForm() { form.classList.remove('open'); form.reset(); fImpVal.textContent = 5; }
+
+$('toggleForm').onclick = () => form.classList.contains('open') ? closeForm() : openForm();
+$('cancelForm').onclick = closeForm;
+fImp.oninput = () => fImpVal.textContent = fImp.value;
+
+form.addEventListener('submit', async e => {
+  e.preventDefault();
+  const title = fTitle.value.trim();
+  if (!title || !fDue.value) return;
+  const btn = $('btnAdd');
+  btn.disabled = true;
+  const ok = await addTask({ title, due: fDue.value, importance: Number(fImp.value), tag: fTag.value });
+  btn.disabled = false;
+  if (ok) { closeForm(); render(); }
+});
+
+$('resetData').onclick = () => {
+  if (confirm('Delete ALL your tasks (including completed ones) and replace them with the sample data?')) resetToSample();
+};
+
+/* ---------- 9. Habit settings screen ---------- */
+const hmMsg = $('hmMsg');
+const hmError = text => { hmMsg.textContent = text || ''; };
+
+$('btnHabitSettings').onclick = () => { renderHabitSettings(); hmError(''); $('habitOverlay').hidden = false; };
+$('hmClose').onclick = () => { $('habitOverlay').hidden = true; };
+$('habitOverlay').addEventListener('click', e => { if (e.target === $('habitOverlay')) $('habitOverlay').hidden = true; });
+
+function renderHabitSettings() {
+  const list = $('hmList');
+  list.textContent = '';
+  habits.forEach((h, i) => {
+    const row = document.createElement('div');
+    row.className = 'hm-row';
+    row.innerHTML = `
+      <label class="span2">Name <input class="f-name" maxlength="40"></label>
+      <label>Type <select class="f-cat"><option value="fun">Fun</option><option value="health">Health</option><option value="career">Career</option></select></label>
+      <label>Repeats <select class="f-kind"><option value="daily">Every day</option><option value="weekly">Weekly target</option></select></label>
+      <label class="g">Grace days <input class="f-grace" type="number" min="0" max="14"></label>
+      <label class="w">Weekly target <input class="f-target" type="number" min="1" max="7"></label>
+      <label class="span3">Sync URL (optional – ticks itself from your sheet) <input class="f-url" placeholder="https://script.google.com/macros/s/…/exec?what=weight&token=…"></label>
+      <div class="hm-actions">
+        <button class="btn small save">Save</button>
+        <button class="btn ghost small up" title="Move earlier">▲</button>
+        <button class="btn ghost small down" title="Move later">▼</button>
+        <button class="btn danger small del">Delete</button>
+        <span class="meta rowmsg"></span>
+      </div>`;
+    row.querySelector('.f-name').value = h.name;
+    row.querySelector('.f-cat').value = h.category;
+    row.querySelector('.f-kind').value = h.kind;
+    row.querySelector('.f-grace').value = h.grace_days;
+    row.querySelector('.f-target').value = h.target_per_week;
+    row.querySelector('.f-url').value = h.source_url || '';
+
+    // Grace days only matter for daily habits; the weekly target only for weekly ones
+    const sync = () => {
+      const weekly = row.querySelector('.f-kind').value === 'weekly';
+      row.querySelector('.g').style.opacity = weekly ? .35 : 1;
+      row.querySelector('.w').style.opacity = weekly ? 1 : .35;
+    };
+    row.querySelector('.f-kind').addEventListener('change', sync);
+    sync();
+
+    const say = text => { row.querySelector('.rowmsg').textContent = text; };
+    row.querySelector('.save').onclick = async ev => {
+      ev.preventDefault();
+      const kind = row.querySelector('.f-kind').value;
+      const url = row.querySelector('.f-url').value.trim();
+      if (url && !url.startsWith('https://')) { say('Sync URL must start with https://'); return; }
+      const name = row.querySelector('.f-name').value.trim();
+      if (!name) { say('Needs a name.'); return; }
+      say('Saving…');
+      const { error } = await sb.from('habits').update({
+        name, category: row.querySelector('.f-cat').value, kind,
+        grace_days: clamp(Number(row.querySelector('.f-grace').value) || 0, 0, 14),
+        target_per_week: kind === 'weekly' ? clamp(Number(row.querySelector('.f-target').value) || 3, 1, 7) : 7,
+        source_url: url || null,
+      }).eq('id', h.id);
+      if (error) { say(error.message); return; }
+      await loadHabits();
+    };
+    row.querySelector('.up').onclick = ev => { ev.preventDefault(); moveHabit(i, -1); };
+    row.querySelector('.down').onclick = ev => { ev.preventDefault(); moveHabit(i, 1); };
+    row.querySelector('.del').onclick = async ev => {
+      ev.preventDefault();
+      if (!confirm(`Delete "${h.name}" and all its history?`)) return;
+      const { error } = await sb.from('habits').delete().eq('id', h.id);
+      if (error) { say(error.message); return; }
+      await loadHabits();
+    };
+    list.appendChild(row);
+  });
+}
+
+// The ▲ ▼ buttons in settings do the same thing as dragging
+function moveHabit(i, dir) { return reorderHabits(i, i + dir); }
+
+$('hmAdd').addEventListener('submit', async e => {
+  e.preventDefault();
+  const name = $('haName').value.trim();
+  if (!name) return;
+  const kind = $('haKind').value;
+  const { error } = await sb.from('habits').insert({
+    name, category: $('haCat').value, kind,
+    grace_days: clamp(Number($('haGrace').value) || 0, 0, 14),
+    target_per_week: kind === 'weekly' ? clamp(Number($('haTarget').value) || 3, 1, 7) : 7,
+    sort_order: habits.reduce((m, h) => Math.max(m, h.sort_order), 0) + 1,
+  });
+  if (error) { hmError(error.message.includes('duplicate') ? 'You already have a habit with that name.' : error.message); return; }
+  hmError('');
+  $('haName').value = '';
+  await loadHabits();
+});
+
+/* ---------- 10. Keep things fresh ---------- */
+let resizeTimer;
+window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 150); });
+
+// Back on the tab or reopening the home-screen app: pull the latest from the cloud
+document.addEventListener('visibilitychange', () => { if (!document.hidden && currentUser) loadAll(); });
+
+// Escape closes whichever card is open
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  closeDetail(); $('habitOverlay').hidden = true;
+});
+
+/* ---------- 11. Home screen icon (drawn here so we need only one file) ---------- */
+(function makeIcon() {
+  const c = document.createElement('canvas'); c.width = c.height = 180;
+  const g = c.getContext('2d');
+  if (!g) return;
+  g.fillStyle = '#0f172a'; g.fillRect(0, 0, 180, 180);
+  [[62, 70, 40, '#3b82f6'], [112, 100, 34, '#f59e0b'], [78, 128, 20, '#93c5fd']].forEach(([x, y, r, col]) => {
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fillStyle = col; g.fill();
+  });
+  $('touchIcon').href = c.toDataURL('image/png');
+})();
+
+/* ---------- 12. Start up ---------- */
+if (!configured) {
+  document.body.classList.remove('signedout');
+  document.body.classList.add('needsetup');
+} else {
+  // Fires once on load with any saved login, then on every sign in / out.
+  // (setTimeout avoids calling Supabase from inside its own callback.)
+  sb.auth.onAuthStateChange((event, session) => {
+    if (event === 'TOKEN_REFRESHED') return;
+    setTimeout(() => onSession(session), 0);
+  });
+}
+</script>
+</body>
+</html>

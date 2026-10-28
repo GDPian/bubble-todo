@@ -301,7 +301,14 @@
         <span><span class="dot work"></span>Work</span>
         <span><span class="dot personal"></span>Personal</span>
         <span>Higher = more important · Bigger = due sooner · Tap for details · Drag up/down to change importance (press and hold first on a phone)</span>
-        <button class="btn ghost small" id="resetData" style="margin-left:auto">Reset to sample data</button>
+        <label class="meta" style="margin-left:auto;display:flex;align-items:center;gap:6px">Bubble size
+          <select id="sizeSel" class="small-select" aria-label="Bubble size">
+            <option value="0.6">Small</option>
+            <option value="0.75">Medium</option>
+            <option value="1">Large</option>
+          </select>
+        </label>
+        <button class="btn ghost small" id="resetData">Reset to sample data</button>
       </div>
     </section>
 
@@ -520,7 +527,12 @@ const HABIT_DEFAULTS = [
   { name: 'Weigh in',       category: 'health', kind: 'daily',  target_per_week: 7, sort_order: 9 },
 ];
 
-const HABIT_BASE = 76;   // normal bubble size (px)
+// Overall bubble size setting (Small / Medium / Large), remembered on this device.
+// 1 = the original big size; Medium is the default.
+let sizeScale = 0.75;
+try { const v = parseFloat(localStorage.getItem('bubbles.size')); if (v >= 0.5 && v <= 1.2) sizeScale = v; } catch (_) {}
+
+const HABIT_BASE = 76;   // normal bubble size (px) at scale 1
 const HABIT_DONE = 68;   // size once ticked off today
 const HABIT_STEP = 5;    // extra px per "growth step"
 const HABIT_CAP = 6;     // after this many steps: stop growing and pulse instead
@@ -626,7 +638,7 @@ function renderHabits() {
     const s = habitState(h);
     if (s.done) doneCount++;
     const capped = !s.done && s.steps >= HABIT_CAP;
-    const size = s.done ? HABIT_DONE : HABIT_BASE + Math.min(s.steps, HABIT_CAP) * HABIT_STEP;
+    const size = (s.done ? HABIT_DONE : HABIT_BASE + Math.min(s.steps, HABIT_CAP) * HABIT_STEP) * sizeScale;
     const b = document.createElement('button');
     b.className = `habit ${h.category}` + (s.done ? ' done' : '') + (capped ? ' capped' : '');
     b.style.width = b.style.height = size + 'px';
@@ -807,10 +819,11 @@ function onSession(session) {
 // Bubble size grows as the due date gets closer: 30+ days away = smallest, due now or overdue = biggest.
 function bubbleSize(task) {
   const MIN = 62, MAX = 140;
-  const scale = Math.min(1, field.clientWidth / 600);   // shrink a little on narrow phones
+  const phone = clamp(field.clientWidth / 600, 0.85, 1);   // narrow screens shrink a touch more
   const days = clamp(daysLeft(task), 0, 30);
-  const closeness = 1 - days / 30;                       // 0 (far away) … 1 (due now)
-  return (MIN + (MAX - MIN) * closeness) * Math.max(0.75, scale);
+  const closeness = 1 - days / 30;                          // 0 (far away) … 1 (due now)
+  const px = (MIN + (MAX - MIN) * closeness) * sizeScale * phone;
+  return Math.max(40, px);                                  // never so small the text is unreadable
 }
 
 // A stable pseudo-random number 0–1 from the task id, so a bubble keeps roughly the same horizontal spot.
@@ -884,7 +897,7 @@ function render() {
     b.style.width = b.style.height = size + 'px';
     b.style.left = (x - r) + 'px';
     b.style.top  = (y - r) + 'px';
-    b.style.fontSize = Math.max(11, size / 9) + 'px';
+    b.style.fontSize = Math.max(10, size / 9) + 'px';
     b.title = `${t.title} – importance ${t.importance}/10`;
     b.innerHTML = `<span class="t"></span><span class="d"></span>`;
     b.querySelector('.t').textContent = t.title;      // textContent = safe against odd characters
@@ -1094,6 +1107,15 @@ form.addEventListener('submit', async e => {
   const ok = await addTask({ title, due: fDue.value, importance: Number(fImp.value), tag: fTag.value });
   btn.disabled = false;
   if (ok) { closeForm(); render(); }
+});
+
+// Bubble size dropdown: applies straight away and is remembered on this device
+$('sizeSel').value = String(sizeScale);
+if ($('sizeSel').value !== String(sizeScale)) $('sizeSel').value = '0.75';
+$('sizeSel').addEventListener('change', () => {
+  sizeScale = parseFloat($('sizeSel').value);
+  try { localStorage.setItem('bubbles.size', String(sizeScale)); } catch (_) {}
+  render(); renderHabits();
 });
 
 $('resetData').onclick = () => {

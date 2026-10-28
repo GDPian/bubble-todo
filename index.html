@@ -225,6 +225,11 @@
   .logrow .sync { color: var(--muted); font-style: italic; }
   .today-box { background: var(--bg); border: 1px solid var(--panel-border); border-radius: 12px; padding: 10px; margin: 6px 0; display: grid; gap: 8px; }
   .today-box textarea { font-size: 16px; }
+  #hdChart svg { width: 100%; height: auto; display: block; }
+  #hdChart text { fill: var(--muted); font-size: 10px; }
+  #hdChart .axis-line { stroke: var(--panel-border); stroke-width: 1; }
+  #hdChart .trend { fill: none; stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
+  .count-big { font-size: 1.3rem; font-weight: 700; }
   .histrow { display: grid; grid-template-columns: 1fr 64px 64px 64px; gap: 6px; align-items: center; width: 100%;
              background: var(--bg); border: 1px solid var(--panel-border); border-radius: 10px;
              padding: 9px 10px; margin-top: 6px; color: var(--text); text-align: left; }
@@ -410,6 +415,15 @@
     <div class="sheet-head"><h2 id="hdTitle">Habit</h2><button class="btn ghost small" id="hdClose">Close</button></div>
     <div id="hdToday"></div>
     <div id="hdStats" class="stats"></div>
+    <div id="hdChartWrap" hidden>
+      <div class="panel-head" style="margin-top:14px"><h2>Trend</h2>
+        <select id="hdChartRange" class="small-select" aria-label="Chart range">
+          <option value="90">3 months</option><option value="180" selected>6 months</option>
+          <option value="365">1 year</option><option value="0">All time</option>
+        </select>
+      </div>
+      <div id="hdChart"></div>
+    </div>
     <h2 style="margin-top:14px">Last 26 weeks</h2>
     <div id="hdHeat" class="heat"></div>
     <h2 style="margin-top:14px">Log</h2>
@@ -444,6 +458,7 @@
       </label>
       <label>Grace days <input id="haGrace" type="number" min="0" max="14" value="2"></label>
       <label>Weekly target <input id="haTarget" type="number" min="1" max="7" value="3"></label>
+      <label>Times per day <input id="haTimes" type="number" min="1" max="20" value="1"></label>
       <label class="span3" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="haAsk" style="width:auto;padding:0"> Ask “what did you do?” when I tick it</label>
       <div class="hm-actions"><button class="btn" type="submit">Add habit</button></div>
     </form>
@@ -574,7 +589,7 @@ const HABIT_DEFAULTS = [
   { name: '10k steps',      category: 'health', kind: 'daily',  target_per_week: 7, sort_order: 5 },
   { name: 'Send a CV',      category: 'career', kind: 'daily',  target_per_week: 7, sort_order: 6, ask_note: true },
   { name: 'Go to the gym',  category: 'health', kind: 'weekly', target_per_week: 3, sort_order: 7 },
-  { name: 'Drink water',    category: 'health', kind: 'daily',  target_per_week: 7, sort_order: 8 },
+  { name: 'Drink water',    category: 'health', kind: 'daily',  target_per_week: 7, sort_order: 8, daily_target: 4 },
   { name: 'Weigh in',       category: 'health', kind: 'daily',  target_per_week: 7, sort_order: 9 },
 ];
 
@@ -603,7 +618,7 @@ async function loadHabits() {
   habits = r.data;
 
   const since = new Date(today()); since.setDate(since.getDate() - 90);
-  const l = await sb.from('habit_log').select('id,habit_id,done_on,note').gte('done_on', toISO(since));
+  const l = await sb.from('habit_log').select('id,habit_id,done_on,note,count').gte('done_on', toISO(since));
   if (l.error) { habitError('Could not load habit history: ' + l.error.message); return; }
   logs = l.data;
   habitError('');
@@ -629,6 +644,9 @@ async function syncHabit(h) {
     const j = await res.json();
     if (j.error) throw new Error(j.error);
     h.latest = (j.latest && typeof j.latest.value === 'number') ? j.latest : null;
+    h.values = (j.values && typeof j.values === 'object') ? j.values : null;      // per-day text, e.g. "103.1 scale · 102.2 trend", "Push", "8,123 steps"
+    h.series = Array.isArray(j.series) ? j.series : null;                          // trend weight over time, for the chart
+    h.types = (j.types && typeof j.types === 'object') ? j.types : null;          // gym: push / pull / legs per day
     const have = new Set(logs.filter(l => l.habit_id === h.id).map(l => l.done_on));
     (j.dates || []).forEach(d => {
       if (/^\d{4}-\d{2}-\d{2}$/.test(d) && !have.has(d)) {
@@ -644,7 +662,9 @@ function loadAll() { return Promise.all([loadTasks(), loadHabits()]); }
 // How should a habit look right now: growth steps, label, and whether it counts as done.
 function habitState(h) {
   const t = today(), todayStr = toISO(t);
-  const dates = new Set(logs.filter(l => l.habit_id === h.id).map(l => l.done_on));
+  const target = h.kind === 'weekly' ? 1 : (h.daily_target || 1);
+  // a day counts once it has all its ticks (e.g. 4 of 4 glasses of water); sheet days always count
+  const dates = new Set(logs.filter(l => l.habit_id === h.id && (l.synced || (l.count || 1) >= target)).map(l => l.done_on));
   const doneToday = dates.has(todayStr);
   let steps = 0, label = '', done = doneToday;
 
@@ -674,7 +694,12 @@ function habitState(h) {
     while (dates.has(toISO(cursor))) { streak++; cursor.setDate(cursor.getDate() - 1); }
     label = streak >= 2 ? '🔥' + streak : (steps > 0 ? missed + 'd missed' : '');
     // Synced habits with a value (weight) show the latest reading instead
-    if (h.latest) label = h.latest.value.toFixed(1) + (h.latest.unit || '');
+    if (h.latest) label = h.latest.label || (h.latest.value.toFixed(1) + (h.latest.unit || ''));
+    // Several ticks a day: show progress, e.g. 2/4
+    if (target > 1) {
+      const row = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && !l.synced);
+      label = `${row ? Math.min(row.count || 1, target) : 0}/${target}`;
+    }
   }
   if (h.syncError) label = '⚠ sync';
   return { steps, label, done };
@@ -791,29 +816,60 @@ async function reorderHabits(from, to) {
   if (!$('habitOverlay').hidden) renderHabitSettings();
 }
 
-// Tap on a habit bubble: not done yet -> tick it; already done -> open its card (history, note, undo).
+// Tap on a habit bubble: not done yet -> tick it (one more glass of water, etc.); fully done -> open its card.
 function onHabitTap(h) {
-  const todayStr = toISO(today());
-  const done = logs.some(l => l.habit_id === h.id && l.done_on === todayStr);
-  if (done) openHabitCard(h.id); else tickHabit(h);
+  const todayStr = toISO(today()), target = h.kind === 'weekly' ? 1 : (h.daily_target || 1);
+  const full = logs.some(l => l.habit_id === h.id && l.done_on === todayStr && (l.synced || (l.count || 1) >= target));
+  if (full) openHabitCard(h.id); else tickHabit(h);
 }
 
-// Tick a habit for today (screen updates first, saves in the background)
+// Tick a habit for today (screen updates first, saves in the background).
+// A habit that needs several ticks a day adds one each time, up to its daily target.
 async function tickHabit(h) {
   if (h.busy) return;
   h.busy = true;
-  const todayStr = toISO(today());
-  const temp = { id: 'tmp-' + Date.now(), habit_id: h.id, done_on: todayStr, note: '' };
-  logs.push(temp);
-  renderHabits();
-  const { data, error } = await sb.from('habit_log')
-    .insert({ habit_id: h.id, done_on: todayStr }).select('id,habit_id,done_on,note').single();
+  const todayStr = toISO(today()), target = h.kind === 'weekly' ? 1 : (h.daily_target || 1);
+  const existing = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && !l.synced);
+  let problem = '';
+  if (existing) {
+    if ((existing.count || 1) < target) {
+      existing.count = (existing.count || 1) + 1;
+      renderHabits();
+      const { error } = await sb.from('habit_log').update({ count: existing.count }).eq('id', existing.id);
+      if (error) problem = 'Could not save: ' + error.message;
+    }
+  } else {
+    const temp = { id: 'tmp-' + Date.now(), habit_id: h.id, done_on: todayStr, note: '', count: 1 };
+    logs.push(temp);
+    renderHabits();
+    const { data, error } = await sb.from('habit_log')
+      .insert({ habit_id: h.id, done_on: todayStr, count: 1 }).select('id,habit_id,done_on,note,count').single();
+    if (error) problem = 'Could not save: ' + error.message;
+    else Object.assign(temp, data);
+  }
   h.busy = false;
-  if (error) { await loadHabits(); habitError('Could not save: ' + error.message); return; }
-  Object.assign(temp, data);
+  if (problem) { await loadHabits(); habitError(problem); return; }
   habitError('');
   // habits set to "ask what I did" (like Send a CV) open the note box straight away
-  if (h.ask_note) openHabitCard(h.id, { focusNote: true });
+  if (h.ask_note && target === 1) openHabitCard(h.id, { focusNote: true });
+}
+
+// Take one tick off today (for habits with several a day); the last one removes the tick altogether
+async function untickOne(h) {
+  const todayStr = toISO(today());
+  const row = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && !l.synced);
+  if (!row) return false;
+  if ((row.count || 1) <= 1) return undoToday(h);
+  if (h.busy) return false;
+  h.busy = true;
+  row.count = (row.count || 1) - 1;
+  const f = fullLogs.find(l => l.id === row.id); if (f) f.count = row.count;
+  renderHabits();
+  const { error } = await sb.from('habit_log').update({ count: row.count }).eq('id', row.id);
+  h.busy = false;
+  if (error) { await loadHabits(); habitError('Could not save: ' + error.message); return false; }
+  habitError('');
+  return true;
 }
 
 // Undo today's tick
@@ -843,7 +899,7 @@ const HABIT_COLOURS = { fun: '#a78bfa', health: '#34d399', career: '#f472b6' };
 async function fetchAllLogs() {
   const out = [], PAGE = 1000;
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await sb.from('habit_log').select('id,habit_id,done_on,note')
+    const { data, error } = await sb.from('habit_log').select('id,habit_id,done_on,note,count')
       .order('done_on').order('id').range(from, from + PAGE - 1);
     if (error) throw error;
     out.push(...data);
@@ -855,10 +911,10 @@ async function fetchAllLogs() {
 // One entry per day this habit was done: manual ticks (can carry a note) and days ticked from the sheet
 function habitEntries(h) {
   const map = new Map();
-  fullLogs.filter(l => l.habit_id === h.id).forEach(l =>
-    map.set(l.done_on, { date: l.done_on, row: l, note: l.note || '', synced: false }));
-  logs.filter(l => l.habit_id === h.id && !l.synced && !map.has(l.done_on)).forEach(l =>
-    map.set(l.done_on, { date: l.done_on, row: l, note: l.note || '', synced: false }));
+  const target = h.kind === 'weekly' ? 1 : (h.daily_target || 1);
+  const entry = l => ({ date: l.done_on, row: l, note: l.note || '', synced: false, count: l.count || 1, partial: (l.count || 1) < target });
+  fullLogs.filter(l => l.habit_id === h.id).forEach(l => map.set(l.done_on, entry(l)));
+  logs.filter(l => l.habit_id === h.id && !l.synced && !map.has(l.done_on)).forEach(l => map.set(l.done_on, entry(l)));
   logs.filter(l => l.habit_id === h.id && l.synced && !map.has(l.done_on)).forEach(l =>
     map.set(l.done_on, { date: l.done_on, row: null, note: '', synced: true }));
   return [...map.values()].sort((a, b) => b.date.localeCompare(a.date));
@@ -866,7 +922,7 @@ function habitEntries(h) {
 
 function habitStats(h) {
   const entries = habitEntries(h);
-  const set = new Set(entries.map(e => e.date));
+  const set = new Set(entries.filter(e => !e.partial).map(e => e.date));   // days not finished (e.g. 2 of 4 glasses) don't count
   const t = today(), todayStr = toISO(t);
   const d30 = new Date(t); d30.setDate(d30.getDate() - 29);
   const since30 = toISO(d30), monthPrefix = todayStr.slice(0, 7);
@@ -893,7 +949,12 @@ function habitStats(h) {
     });
     weeksOn = Object.values(wk).filter(n => n >= h.target_per_week).length;
   }
-  return { entries, set, total: set.size, last30, month, cur, best, weeksOn };
+  let ppl = null;                                            // gym: how many Push / Pull / Legs sessions in the last 30 days
+  if (h.types) {
+    ppl = { push: 0, pull: 0, legs: 0 };
+    Object.keys(h.types).forEach(d => { if (d >= since30 && ppl[h.types[d]] !== undefined) ppl[h.types[d]]++; });
+  }
+  return { entries, set, total: set.size, last30, month, cur, best, weeksOn, ppl };
 }
 
 const dayLabel = iso => parseDate(iso).toLocaleDateString(undefined,
@@ -936,7 +997,19 @@ function buildHabitToday(h, opts) {
   const mine = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && !l.synced);
   const synced = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && l.synced);
   const wrap = document.createElement('div'); wrap.className = 'today-box';
-  if (mine) {
+  const target = h.kind === 'weekly' ? 1 : (h.daily_target || 1);
+  if (target > 1) {
+    // a habit with several ticks a day (e.g. drink water 4 times)
+    const n = mine ? Math.min(mine.count || 1, target) : 0;
+    wrap.innerHTML = '<div class="meta">Today <span class="count-big"></span></div>' +
+      '<div class="form-actions"><button class="btn good plus">+1</button><button class="btn ghost minus">−1</button></div>';
+    wrap.querySelector('.count-big').textContent = `${n} / ${target}` + (n >= target ? ' ✓' : '');
+    const refresh = () => { if (cardId === h.id) { buildHabitToday(h, {}); renderHabitCard(h); } };
+    wrap.querySelector('.plus').disabled = n >= target;
+    wrap.querySelector('.minus').disabled = n <= 0;
+    wrap.querySelector('.plus').onclick = () => tickHabit(h).then(refresh);
+    wrap.querySelector('.minus').onclick = () => untickOne(h).then(refresh);
+  } else if (mine) {
     wrap.innerHTML = '<div class="meta">✓ Done today. What did you do?</div>' +
       '<textarea rows="2" maxlength="500" placeholder="e.g. Applied to Acme, sent CV to a recruiter"></textarea>' +
       '<div class="form-actions"><button class="btn good save">Save note</button>' +
@@ -955,6 +1028,37 @@ function buildHabitToday(h, opts) {
   box.appendChild(wrap);
 }
 
+// Line chart of a series [{d:'2026-10-28', v:102.2}, …] (used for trend weight)
+function drawSeries(el, series, colour, unit, rangeDays) {
+  el.textContent = '';
+  let pts = series.slice().sort((a, b) => a.d.localeCompare(b.d));
+  if (rangeDays) { const c = new Date(today()); c.setDate(c.getDate() - rangeDays); pts = pts.filter(p => p.d >= toISO(c)); }
+  if (pts.length < 2) { el.innerHTML = '<p class="meta">Not enough readings in this range yet.</p>'; return; }
+  const W = 640, H = 170, L = 40, R = 10, T = 10, B = 22, NS = 'http://www.w3.org/2000/svg';
+  const day = d => parseDate(d).getTime() / 86400000;
+  const x0 = day(pts[0].d), x1 = day(pts[pts.length - 1].d) || x0 + 1;
+  let lo = Math.min(...pts.map(p => p.v)), hi = Math.max(...pts.map(p => p.v));
+  if (hi - lo < 1) { const m = (hi + lo) / 2; lo = m - 0.5; hi = m + 0.5; }
+  const pad = (hi - lo) * 0.1; lo -= pad; hi += pad;
+  const X = d => L + (day(d) - x0) / Math.max(1, x1 - x0) * (W - L - R);
+  const Y = v => T + (hi - v) / (hi - lo) * (H - T - B);
+  const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const add = (tag, attrs, text) => { const n = document.createElementNS(NS, tag); Object.entries(attrs).forEach(([k, v]) => n.setAttribute(k, v)); if (text) n.textContent = text; svg.appendChild(n); return n; };
+  [hi, (hi + lo) / 2, lo].forEach(v => {
+    add('line', { x1: L, x2: W - R, y1: Y(v), y2: Y(v), class: 'axis-line' });
+    add('text', { x: L - 4, y: Y(v) + 3, 'text-anchor': 'end' }, v.toFixed(1));
+  });
+  add('text', { x: L, y: H - 6 }, dayLabel(pts[0].d));
+  add('text', { x: W - R, y: H - 6, 'text-anchor': 'end' }, dayLabel(pts[pts.length - 1].d));
+  add('polyline', { class: 'trend', stroke: colour, points: pts.map(p => `${X(p.d).toFixed(1)},${Y(p.v).toFixed(1)}`).join(' ') });
+  const last = pts[pts.length - 1];
+  add('circle', { cx: X(last.d), cy: Y(last.v), r: 4, fill: colour });
+  add('text', { x: X(last.d) - 6, y: Y(last.v) - 8, 'text-anchor': 'end' }, last.v.toFixed(1) + unit);
+  const t = document.createElementNS(NS, 'title'); t.textContent = `${pts.length} readings`; svg.appendChild(t);
+  el.appendChild(svg);
+}
+$('hdChartRange').addEventListener('change', () => { const h = habits.find(x => x.id === cardId); if (h) renderHabitCard(h); });
+
 // Stats, calendar and log (safe to redraw: it leaves the note box alone)
 function renderHabitCard(h) {
   const st = habitStats(h), todayStr = toISO(today());
@@ -962,12 +1066,18 @@ function renderHabitCard(h) {
   const tiles = [['All time', st.total], ['Last 30 days', st.last30], ['This month', st.month]];
   if (h.kind === 'weekly') tiles.push(['Weeks on target', st.weeksOn], ['Target / week', h.target_per_week]);
   else tiles.push(['Streak', st.cur >= 2 ? '🔥 ' + st.cur : st.cur], ['Best streak', st.best]);
+  if (st.ppl) tiles.push(['Push / Pull / Legs (30 days)', `${st.ppl.push} / ${st.ppl.pull} / ${st.ppl.legs}`]);
   const stats = $('hdStats'); stats.textContent = '';
   tiles.forEach(([label, val]) => {
     const d = document.createElement('div'); d.className = 'stat';
     d.innerHTML = '<b></b><span></span>'; d.querySelector('b').textContent = val; d.querySelector('span').textContent = label;
     stats.appendChild(d);
   });
+
+  // trend chart (only habits whose sheet sends a series, i.e. Weigh in)
+  const hasSeries = !!(h.series && h.series.length);
+  $('hdChartWrap').hidden = !hasSeries;
+  if (hasSeries) drawSeries($('hdChart'), h.series, HABIT_COLOURS[h.category] || '#a78bfa', ' kg', Number($('hdChartRange').value));
 
   // calendar: 26 weeks, one column per week (Monday at the top)
   const heat = $('hdHeat'); heat.textContent = '';
@@ -989,9 +1099,9 @@ function renderHabitCard(h) {
   rows.slice(0, logShown).forEach(e => {
     const r = document.createElement('div'); r.className = 'logrow';
     r.innerHTML = '<span class="d"></span><span class="body"></span>';
-    r.querySelector('.d').textContent = dayLabel(e.date);
+    r.querySelector('.d').textContent = dayLabel(e.date) + (e.partial ? ` · ${e.count}/${h.daily_target}` : '');
     const body = r.querySelector('.body');
-    if (e.synced) { body.className = 'body sync'; body.textContent = 'from your sheet'; }
+    if (e.synced) { body.className = 'body sync'; body.textContent = (h.values && h.values[e.date]) || 'from your sheet'; }
     else {
       const inp = document.createElement('input');
       inp.maxLength = 500; inp.placeholder = 'Add a note'; inp.value = e.note;
@@ -1425,6 +1535,7 @@ function renderHabitSettings() {
       <label>Repeats <select class="f-kind"><option value="daily">Every day</option><option value="weekly">Weekly target</option></select></label>
       <label class="g">Grace days <input class="f-grace" type="number" min="0" max="14"></label>
       <label class="w">Weekly target <input class="f-target" type="number" min="1" max="7"></label>
+      <label class="g">Times per day <input class="f-times" type="number" min="1" max="20"></label>
       <label class="span3">Sync URL (optional – ticks itself from your sheet) <input class="f-url" placeholder="https://script.google.com/macros/s/…/exec?what=weight&token=…"></label>
       <label class="span3" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" class="f-ask" style="width:auto;padding:0"> Ask “what did you do?” when I tick it (good for Send a CV)</label>
       <div class="hm-actions">
@@ -1439,13 +1550,14 @@ function renderHabitSettings() {
     row.querySelector('.f-kind').value = h.kind;
     row.querySelector('.f-grace').value = h.grace_days;
     row.querySelector('.f-target').value = h.target_per_week;
+    row.querySelector('.f-times').value = h.daily_target || 1;
     row.querySelector('.f-url').value = h.source_url || '';
     row.querySelector('.f-ask').checked = !!h.ask_note;
 
     // Grace days only matter for daily habits; the weekly target only for weekly ones
     const sync = () => {
       const weekly = row.querySelector('.f-kind').value === 'weekly';
-      row.querySelector('.g').style.opacity = weekly ? .35 : 1;
+      row.querySelectorAll('.g').forEach(e => { e.style.opacity = weekly ? .35 : 1; });
       row.querySelector('.w').style.opacity = weekly ? 1 : .35;
     };
     row.querySelector('.f-kind').addEventListener('change', sync);
@@ -1464,6 +1576,7 @@ function renderHabitSettings() {
         name, category: row.querySelector('.f-cat').value, kind,
         grace_days: clamp(Number(row.querySelector('.f-grace').value) || 0, 0, 14),
         target_per_week: kind === 'weekly' ? clamp(Number(row.querySelector('.f-target').value) || 3, 1, 7) : 7,
+        daily_target: kind === 'weekly' ? 1 : clamp(Number(row.querySelector('.f-times').value) || 1, 1, 20),
         source_url: url || null,
         ask_note: row.querySelector('.f-ask').checked,
       }).eq('id', h.id);
@@ -1495,6 +1608,7 @@ $('hmAdd').addEventListener('submit', async e => {
     name, category: $('haCat').value, kind,
     grace_days: clamp(Number($('haGrace').value) || 0, 0, 14),
     target_per_week: kind === 'weekly' ? clamp(Number($('haTarget').value) || 3, 1, 7) : 7,
+    daily_target: kind === 'weekly' ? 1 : clamp(Number($('haTimes').value) || 1, 1, 20),
     ask_note: $('haAsk').checked,
     sort_order: habits.reduce((m, h) => Math.max(m, h.sort_order), 0) + 1,
   });

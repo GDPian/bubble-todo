@@ -494,6 +494,25 @@
       <label>Ends <span class="meta">(optional)</span>
         <input id="evEnd" type="time">
       </label>
+      <label>Repeats
+        <select id="evRepeat">
+          <option value="none">Does not repeat</option>
+          <option value="daily">Every day</option>
+          <option value="weekdays">Every weekday (Mon–Fri)</option>
+          <option value="weekly">Every week</option>
+          <option value="biweekly">Every 2 weeks</option>
+          <option value="monthly">Every month</option>
+        </select>
+      </label>
+      <label>Until <span class="meta">(empty = no end)</span>
+        <input id="evUntil" type="date">
+      </label>
+      <label class="wide" id="evScopeBox" hidden>Change applies to
+        <select id="evScope">
+          <option value="one">This one only (move or cancel just this day)</option>
+          <option value="all">The whole series</option>
+        </select>
+      </label>
       <div class="wide form-actions">
         <button class="btn" type="submit" id="evSave">Save</button>
         <button class="btn danger" type="button" id="evDelete" hidden>Delete</button>
@@ -798,8 +817,8 @@ function calDaySection(label, iso) {
   // an event is on this day if it starts on or before it and ends on or after it
   // family-calendar events that touch this day, plus my own typed-in events for this day
   const family = (calEvents || []).filter(e => e.start <= iso && (e.end || e.start) >= iso);
-  const mine = myEvents.filter(x => x.on_date === iso).map(x => ({
-    title: x.title, start: iso, end: iso, all_day: !x.start_time, tag: x.tag, evId: x.id,
+  const mine = myEvents.filter(x => evOccursOn(x, iso)).map(x => ({
+    title: x.title, start: iso, end: iso, all_day: !x.start_time, tag: x.tag, evId: x.id, occ: iso, repeats: x.repeat !== 'none',
     time: x.start_time ? x.start_time.slice(0, 5) : null, end_time: x.end_time ? x.end_time.slice(0, 5) : null }));
   const evs = family.concat(mine);
   const allDay = evs.filter(e => e.all_day), timed = evs.filter(e => !e.all_day);
@@ -816,7 +835,7 @@ function calDaySection(label, iso) {
     const chips = document.createElement('div'); chips.className = 'calChips';
     allDay.forEach(e => {
       const c = document.createElement('span'); c.className = 'calChip' + (e.evId ? ' mine ' + e.tag : '');
-      if (e.evId) c.addEventListener('click', () => openEvent(e.evId));
+      if (e.evId) c.addEventListener('click', () => openEvent(e.evId, e.occ));
       c.textContent = e.title + (e.end && e.end > iso ? ' → ' + calShort(e.end) : '');
       chips.appendChild(c);
     });
@@ -824,7 +843,7 @@ function calDaySection(label, iso) {
   }
   timed.forEach(e => {
     const row = document.createElement('div'); row.className = 'calEv' + (e.evId ? ' mine ' + e.tag : '');
-    if (e.evId) row.addEventListener('click', () => openEvent(e.evId));      // tap my own event = edit it
+    if (e.evId) row.addEventListener('click', () => openEvent(e.evId, e.occ));      // tap my own event = edit it
     const tm = document.createElement('span'); tm.className = 't';
     // show the start time; add the end only if it is on the same day and differs
     tm.textContent = (e.start < iso ? 'cont.' : e.time) +
@@ -889,51 +908,136 @@ async function loadEvents() {
   renderCalendar($('calMsg').textContent);
 }
 
-let evId = null;      // null = adding a new event
+// Whole-day number for an ISO date (plain day maths, no time-zone surprises)
+const dayNum = iso => { const [y, m, d] = iso.split('-').map(Number); return Date.UTC(y, m - 1, d) / 86400000; };
 
-function openEvent(id, dateIso) {
+// Does this event (possibly repeating) happen on this day?
+function evOccursOn(x, iso) {
+  if (iso < x.on_date) return false;
+  if (x.repeat === 'none' || !x.repeat) return iso === x.on_date;
+  if ((x.skip_dates || []).includes(iso)) return false;           // this day was moved or cancelled
+  if (x.repeat_until && iso > x.repeat_until) return false;
+  const diff = dayNum(iso) - dayNum(x.on_date);
+  const dow = parseDate(iso).getDay();                            // 0 = Sunday
+  switch (x.repeat) {
+    case 'daily':    return true;
+    case 'weekdays': return dow >= 1 && dow <= 5;
+    case 'weekly':   return diff % 7 === 0;
+    case 'biweekly': return diff % 14 === 0;
+    case 'monthly':  return parseDate(iso).getDate() === parseDate(x.on_date).getDate();
+  }
+  return false;
+}
+
+let evId = null;      // null = adding a new event
+let evOcc = null;     // the day you tapped (matters for repeating events)
+
+// Show/hide the "until" box and the "this one / whole series" choice
+function syncEventForm() {
+  const e = evId ? myEvents.find(x => x.id === evId) : null;
+  const series = !!e && e.repeat !== 'none';
+  $('evScopeBox').hidden = !series;
+  const one = series && $('evScope').value === 'one';
+  $('evRepeat').disabled = $('evUntil').disabled = one;           // a single moved day does not repeat
+}
+
+function openEvent(id, occIso) {
   const e = id ? myEvents.find(x => x.id === id) : null;
   if (id && !e) return;
-  evId = id;
+  evId = id; evOcc = occIso || null;
   $('evHead').textContent = e ? 'Edit event' : 'New event';
   $('evTitle').value = e ? e.title : '';
-  $('evDate').value = e ? e.on_date : (dateIso || toISO(today()));
+  // for a repeating event show the day you tapped, so you can move just that day
+  $('evDate').value = e ? (e.repeat !== 'none' && occIso ? occIso : e.on_date) : toISO(today());
   $('evTag').value = e ? e.tag : 'personal';
   $('evStart').value = e && e.start_time ? e.start_time.slice(0, 5) : '';
   $('evEnd').value = e && e.end_time ? e.end_time.slice(0, 5) : '';
+  $('evRepeat').value = e ? e.repeat : 'none';
+  $('evUntil').value = e && e.repeat_until ? e.repeat_until : '';
+  $('evScope').value = 'one';
   $('evDelete').hidden = !e;
   $('evMsg').textContent = '';
+  syncEventForm();
   $('evOverlay').hidden = false;
   if (!e) $('evTitle').focus();
 }
-function closeEvent() { evId = null; $('evOverlay').hidden = true; }
+function closeEvent() { evId = null; evOcc = null; $('evOverlay').hidden = true; }
 
 $('calAdd').onclick = () => openEvent(null);
 $('evClose').onclick = closeEvent;
+$('evScope').onchange = syncEventForm;
 $('evOverlay').addEventListener('click', e => { if (e.target === $('evOverlay')) closeEvent(); });
+
+// Save, then show the result
+async function saveEventRows(work) {
+  $('evSave').disabled = true;
+  const err = await work();
+  $('evSave').disabled = false;
+  if (err) { $('evMsg').textContent = 'Could not save: ' + err.message; return; }
+  closeEvent();
+  renderCalendar($('calMsg').textContent);
+}
 
 $('evForm').addEventListener('submit', async e => {
   e.preventDefault();
   const row = { title: $('evTitle').value.trim(), on_date: $('evDate').value, tag: $('evTag').value,
-                start_time: $('evStart').value || null, end_time: $('evEnd').value || null };
+                start_time: $('evStart').value || null, end_time: $('evEnd').value || null,
+                repeat: $('evRepeat').value, repeat_until: $('evUntil').value || null };
   if (!row.title || !row.on_date) return;
   if (row.end_time && !row.start_time) { $('evMsg').textContent = 'Add a start time, or clear the end time.'; return; }
-  $('evSave').disabled = true;
-  const r = evId ? await sb.from('events').update(row).eq('id', evId).select().single()
-                 : await sb.from('events').insert(row).select().single();
-  $('evSave').disabled = false;
-  if (r.error) { $('evMsg').textContent = 'Could not save: ' + r.error.message; return; }
-  if (evId) myEvents = myEvents.map(x => x.id === evId ? r.data : x); else myEvents.push(r.data);
-  closeEvent();
-  renderCalendar($('calMsg').textContent);
+  if (row.repeat === 'none') row.repeat_until = null;
+  const old = evId ? myEvents.find(x => x.id === evId) : null;
+
+  // 1) a brand-new event, or an edit of a one-off event
+  if (!old || old.repeat === 'none') {
+    await saveEventRows(async () => {
+      const r = old ? await sb.from('events').update(row).eq('id', evId).select().single()
+                    : await sb.from('events').insert(row).select().single();
+      if (r.error) return r.error;
+      if (old) myEvents = myEvents.map(x => x.id === evId ? r.data : x); else myEvents.push(r.data);
+    });
+    return;
+  }
+  // 2) a repeating event, whole series: shift the start by however far you moved the day
+  if ($('evScope').value === 'all') {
+    const shift = dayNum(row.on_date) - dayNum(evOcc || old.on_date);
+    const d = parseDate(old.on_date); d.setDate(d.getDate() + shift);
+    row.on_date = toISO(d);
+    await saveEventRows(async () => {
+      const r = await sb.from('events').update(row).eq('id', evId).select().single();
+      if (r.error) return r.error;
+      myEvents = myEvents.map(x => x.id === evId ? r.data : x);
+    });
+    return;
+  }
+  // 3) a repeating event, this day only: skip that day in the series and add a one-off copy on the new day
+  await saveEventRows(async () => {
+    const skip = [...(old.skip_dates || []), evOcc];
+    const r1 = await sb.from('events').update({ skip_dates: skip }).eq('id', evId).select().single();
+    if (r1.error) return r1.error;
+    myEvents = myEvents.map(x => x.id === evId ? r1.data : x);
+    const r2 = await sb.from('events').insert({ ...row, repeat: 'none', repeat_until: null }).select().single();
+    if (r2.error) return r2.error;
+    myEvents.push(r2.data);
+  });
 });
 
 $('evDelete').onclick = async () => {
-  if (!confirm('Delete this event?')) return;
-  const id = evId;
-  const { error } = await sb.from('events').delete().eq('id', id);
+  const old = myEvents.find(x => x.id === evId);
+  if (!old) return;
+  const series = old.repeat !== 'none';
+  const one = series && $('evScope').value === 'one';
+  const ask = !series ? 'Delete this event?' : one ? 'Cancel just this day (' + evOcc + ')?' : 'Delete the WHOLE repeating series?';
+  if (!confirm(ask)) return;
+  let error;
+  if (one) {
+    const r = await sb.from('events').update({ skip_dates: [...(old.skip_dates || []), evOcc] }).eq('id', evId).select().single();
+    error = r.error; if (!error) myEvents = myEvents.map(x => x.id === evId ? r.data : x);
+  } else {
+    const r = await sb.from('events').delete().eq('id', evId);
+    error = r.error; if (!error) myEvents = myEvents.filter(x => x.id !== evId);
+  }
   if (error) { $('evMsg').textContent = 'Could not delete: ' + error.message; return; }
-  myEvents = myEvents.filter(x => x.id !== id);
   closeEvent();
   renderCalendar($('calMsg').textContent);
 };

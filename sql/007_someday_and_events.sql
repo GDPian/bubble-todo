@@ -12,9 +12,6 @@ create table public.events (
   start_time time,                     -- empty = an all-day event
   end_time   time,
   tag        text not null default 'personal' check (tag in ('work', 'personal', 'her')),
-  repeat     text not null default 'none' check (repeat in ('none', 'daily', 'weekdays', 'weekly', 'biweekly', 'monthly')),
-  repeat_until date,                   -- empty = repeats for ever
-  skip_dates date[] not null default '{}',   -- single days taken out of a repeating event (moved or cancelled)
   created_at timestamptz not null default now()
 );
 

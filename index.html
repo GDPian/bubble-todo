@@ -112,8 +112,9 @@
   .calNone { font-size: .85rem; color: var(--muted); }
   .calChips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
   .calChip { --c: var(--cal); font-size: .78rem; padding: 2px 9px; border-radius: 999px; color: #0f172a; background: var(--c); }
-  .calEv { --c: var(--cal); display: flex; gap: 8px; align-items: baseline; font-size: .88rem; padding: 2px 0 2px 8px;
-           border-left: 3px solid var(--c); margin-bottom: 3px; }
+  .calEv { --c: var(--cal); display: flex; gap: 8px; align-items: baseline; font-size: .9rem; padding: 7px 0 7px 10px;
+           border-left: 3px solid var(--c); margin-bottom: 8px; }
+  .calTask:last-of-type { margin-bottom: 10px; }   /* a gap between my tasks and the timed events */
   .calEv .t { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 6.6em; }
   .calEv .p { color: var(--muted); font-size: .78rem; }
 
@@ -831,6 +832,13 @@ function calDaySection(label, iso) {
     day.classList.add('calEmpty');
     const n = document.createElement('div'); n.className = 'calNone'; n.textContent = 'Nothing planned'; day.appendChild(n);
   }
+  // tasks first, then all-day items, then the timed events
+  due.forEach(t => {
+    const row = document.createElement('button'); row.className = 'calTask ' + t.tag;
+    row.textContent = '☐ ' + t.title + (t.due < iso ? ' (overdue)' : '');
+    row.addEventListener('click', () => openDetail(t.id));      // tap = the usual task card
+    day.appendChild(row);
+  });
   if (allDay.length) {
     const chips = document.createElement('div'); chips.className = 'calChips';
     allDay.forEach(e => {
@@ -851,12 +859,6 @@ function calDaySection(label, iso) {
     const ti = document.createElement('span'); ti.textContent = e.title;
     row.append(tm, ti);
     if (e.place) { const p = document.createElement('span'); p.className = 'p'; p.textContent = '@ ' + e.place; row.appendChild(p); }
-    day.appendChild(row);
-  });
-  due.forEach(t => {
-    const row = document.createElement('button'); row.className = 'calTask ' + t.tag;
-    row.textContent = '☐ ' + t.title + (t.due < iso ? ' (overdue)' : '');
-    row.addEventListener('click', () => openDetail(t.id));      // tap = the usual task card
     day.appendChild(row);
   });
   return day;

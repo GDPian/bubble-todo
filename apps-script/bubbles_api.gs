@@ -17,6 +17,13 @@
  * Other links (open them in a browser):
  *       ?what=exercises&token=…                  every exercise and which of Push / Pull / Legs it counts as
  *       ?what=steps_set&date=2026-10-28&steps=8123&token=…     what the iPhone Shortcut calls to save steps
+ *       ?what=calendar&token=…                   the next 30 days of the family calendar (add &days=14 for fewer)
+ *
+ * CALENDAR SETUP (once): Project Settings > Script properties > Add property:
+ *       name  FAMILY_CAL_URL    value  the calendar link from Family Daily (the https://app.familydaily.app/api/calendar/... one)
+ *   Keep that link private: it shows your whole family calendar to anyone who has it. It lives only here,
+ *   never in the app or on GitHub. Then Deploy > Manage deployments > pencil > New version > Deploy.
+ *   The app picks the calendar up by itself: it reuses the address from your habit Sync URLs.
  *
  * After you edit this script later: Deploy > Manage deployments > pencil > Version: New version > Deploy.
  */
@@ -42,6 +49,8 @@ function doGet(e) {
   const secret = PropertiesService.getScriptProperties().getProperty('BUBBLES_TOKEN');
   if (!secret || p.token !== secret) return bubblesJson_({ error: 'unauthorised' });
   try {
+    // The calendar does not need the sheet, so it is answered first (a sheet problem can't break it)
+    if (p.what === 'calendar') return bubblesJson_(bubblesCalendar_(p));
     const ss = SpreadsheetApp.openById(BUBBLES_SHEET_ID);
     if (p.what === 'weight')    return bubblesJson_(bubblesWeight_(ss));
     if (p.what === 'gym')       return bubblesJson_(bubblesGym_(ss));
@@ -290,4 +299,178 @@ function bubblesSteps_(ss) {
   const latest = todaySteps === null ? null
     : { date: todayIso, value: todaySteps, unit: ' steps', label: todaySteps >= 1000 ? (todaySteps / 1000).toFixed(1) + 'k' : String(todaySteps) };
   return { dates: dates, latest: latest, values: values };
+}
+
+/* -------------------------------------------------------------- calendar */
+
+// Reads the family calendar link (script property FAMILY_CAL_URL), works out repeating events
+// and returns the next few days. Only the title, the time and a short place name leave this script:
+// notes/descriptions and links (e.g. video-call passwords) are dropped on purpose.
+const BUBBLES_CAL_TZ = 'Asia/Tokyo';     // the calendar's time zone (times in the feed are used as written)
+const BUBBLES_CAL_DAYS = 30;             // how many days ahead to return by default
+const BUBBLES_CAL_CACHE_SECS = 1800;     // the feed only refreshes about every 12 hours, so 30 minutes is plenty
+
+function bubblesCalendar_(p) {
+  let url = PropertiesService.getScriptProperties().getProperty('FAMILY_CAL_URL');
+  if (!url) return { error: 'Script property FAMILY_CAL_URL is not set (see the setup notes at the top of the script)' };
+  url = url.trim().replace(/^webcal:/i, 'https:');
+  const days = Math.max(1, Math.min(90, Math.round(Number(p.days)) || BUBBLES_CAL_DAYS));
+  const todayIso = Utilities.formatDate(new Date(), BUBBLES_CAL_TZ, 'yyyy-MM-dd');
+  const key = 'cal_' + todayIso + '_' + days;     // includes the date so "today" is never stale after midnight
+  const cache = CacheService.getScriptCache();
+  if (!p.refresh) {
+    const hit = cache.get(key);
+    if (hit) return JSON.parse(hit);
+  }
+  const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+  if (res.getResponseCode() !== 200) return { error: 'Calendar link answered with code ' + res.getResponseCode() };
+  const text = res.getContentText();
+  if (text.indexOf('BEGIN:VCALENDAR') < 0) return { error: 'The calendar link did not return a calendar' };
+
+  const todayDay = bubblesDay_(todayIso);
+  const out = bubblesCalWindow_(bubblesIcsEvents_(text), todayDay, todayDay + days - 1);
+  out.generated = Utilities.formatDate(new Date(), BUBBLES_CAL_TZ, "yyyy-MM-dd'T'HH:mm");
+  out.from = todayIso;
+  out.to = bubblesDayIso_(todayDay + days - 1);
+  const json = JSON.stringify(out);
+  if (json.length < 90000) cache.put(key, json, BUBBLES_CAL_CACHE_SECS);   // cache values are limited to ~100KB
+  return out;
+}
+
+// "2026-10-29" <-> a whole number of days since 1970 (plain day maths, no time-zone surprises)
+function bubblesDay_(iso) { const m = iso.split('-').map(Number); return Date.UTC(m[0], m[1] - 1, m[2]) / 86400000; }
+function bubblesDayIso_(day) { return new Date(day * 86400000).toISOString().slice(0, 10); }
+function bubblesHm_(min) { return ('0' + Math.floor(min / 60)).slice(-2) + ':' + ('0' + (min % 60)).slice(-2); }
+
+// Calendar text:  20261029T200000  /  20261029  /  20261029T110000Z   ->  { day, min }  (min = null for all-day)
+function bubblesIcsDate_(val) {
+  const m = String(val).trim().match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?(Z)?)?$/);
+  if (!m) return null;
+  if (m[4] === undefined) return { day: Date.UTC(+m[1], +m[2] - 1, +m[3]) / 86400000, min: null };
+  if (m[7] === 'Z') {   // a UTC time: convert to the calendar's own time zone
+    const local = Utilities.formatDate(new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5])), BUBBLES_CAL_TZ, 'yyyy-MM-dd HH:mm');
+    const t = local.split(/[- :]/).map(Number);
+    return { day: Date.UTC(t[0], t[1] - 1, t[2]) / 86400000, min: t[3] * 60 + t[4] };
+  }
+  return { day: Date.UTC(+m[1], +m[2] - 1, +m[3]) / 86400000, min: +m[4] * 60 + +m[5] };   // times are used as written
+}
+
+// Calendar text escapes:  \,  \;  \\  \n
+function bubblesIcsText_(s) {
+  return String(s || '').replace(/\\(.)/g, (all, c) => (c === 'n' || c === 'N') ? ' ' : c).trim();
+}
+
+// The whole calendar file -> a list of raw events
+function bubblesIcsEvents_(text) {
+  const lines = text.replace(/\r\n?/g, '\n').replace(/\n[ \t]/g, '').split('\n');   // long lines are "folded" onto the next line
+  const events = [];
+  let cur = null;
+  lines.forEach(line => {
+    if (line === 'BEGIN:VEVENT') { cur = { exdays: {} }; return; }
+    if (line === 'END:VEVENT')   { if (cur) events.push(cur); cur = null; return; }
+    if (!cur) return;
+    const i = line.indexOf(':');
+    if (i < 0) return;
+    const name = line.slice(0, i).split(';')[0].toUpperCase(), val = line.slice(i + 1);
+    if (name === 'DTSTART') cur.start = bubblesIcsDate_(val);
+    else if (name === 'DTEND') cur.end = bubblesIcsDate_(val);
+    else if (name === 'SUMMARY') cur.title = bubblesIcsText_(val);
+    else if (name === 'LOCATION') cur.place = bubblesPlace_(bubblesIcsText_(val));
+    else if (name === 'RRULE') cur.rrule = val;
+    else if (name === 'UID') cur.uid = val.trim();
+    else if (name === 'STATUS') cur.cancelled = /cancel/i.test(val);
+    else if (name === 'RECURRENCE-ID') cur.recurrenceDay = (bubblesIcsDate_(val) || {}).day;
+    else if (name === 'EXDATE') val.split(',').forEach(v => { const d = bubblesIcsDate_(v); if (d) cur.exdays[d.day] = true; });
+    // everything else (notes, links, attendees…) is deliberately ignored
+  });
+  return events;
+}
+
+// Keep only a short place NAME: no web links (they can hold meeting passwords) and no street addresses
+function bubblesPlace_(loc) {
+  if (!loc || /^https?:/i.test(loc) || /^〒/.test(loc)) return '';
+  return loc.split(',')[0].trim().slice(0, 50);
+}
+
+// Which days does one (possibly repeating) event start on, up to lastDay?  Handles DAILY / WEEKLY (with BYDAY) /
+// MONTHLY / YEARLY, INTERVAL, COUNT, UNTIL and cancelled days (EXDATE). Returns { days, unsupported }.
+function bubblesCalRepeat_(ev, lastDay) {
+  const base = ev.start.day;
+  if (!ev.rrule) return { days: [base], unsupported: false };
+  const r = {};
+  ev.rrule.split(';').forEach(kv => { const k = kv.indexOf('='); if (k > 0) r[kv.slice(0, k).toUpperCase()] = kv.slice(k + 1); });
+  const interval = Math.max(1, Number(r.INTERVAL) || 1), count = Number(r.COUNT) || 0;
+  const until = r.UNTIL ? (bubblesIcsDate_(r.UNTIL) || {}).day : null;
+  const freq = r.FREQ;
+  const known = ['FREQ', 'INTERVAL', 'COUNT', 'UNTIL', 'WKST', 'BYDAY'];
+  const unsupported = Object.keys(r).some(k => known.indexOf(k) < 0) || (r.BYDAY && freq !== 'WEEKLY') || ['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY'].indexOf(freq) < 0;
+  const days = [];
+  let made = 0;
+  const push = day => {   // returns false once the series is over
+    if (until !== null && until !== undefined && day > until) return false;
+    if (day > lastDay) return false;
+    made++;
+    days.push(day);                       // a cancelled day still counts towards COUNT; it is removed below
+    return !(count && made >= count);
+  };
+  const d0 = new Date(base * 86400000), y = d0.getUTCFullYear(), mo = d0.getUTCMonth(), dom = d0.getUTCDate();
+  const weekdayOf = day => (new Date(day * 86400000).getUTCDay() + 6) % 7;   // Monday = 0
+  const CODES = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
+  for (let k = 0; k < 5000; k++) {
+    if (freq === 'DAILY') { if (!push(base + k * interval)) break; }
+    else if (freq === 'WEEKLY' && r.BYDAY) {
+      const weekStart = base - weekdayOf(base) + 7 * interval * k;
+      const picks = r.BYDAY.split(',').map(s => CODES.indexOf(s.slice(-2))).filter(i => i >= 0).sort((a, b) => a - b);
+      let stop = false;
+      for (const i of picks) { const day = weekStart + i; if (day < base) continue; if (!push(day)) { stop = true; break; } }
+      if (stop) break;
+    }
+    else if (freq === 'WEEKLY')  { if (!push(base + 7 * interval * k)) break; }
+    else if (freq === 'MONTHLY') {
+      const t = new Date(Date.UTC(y, mo + interval * k, dom));
+      if (t.getUTCDate() !== dom) { if (Date.UTC(y, mo + interval * k, 1) / 86400000 > lastDay) break; continue; }   // e.g. the 31st in a short month: skipped
+      if (!push(t.getTime() / 86400000)) break;
+    }
+    else if (freq === 'YEARLY') {
+      const t = new Date(Date.UTC(y + interval * k, mo, dom));
+      if (t.getUTCDate() !== dom) { if (t.getTime() / 86400000 > lastDay) break; continue; }
+      if (!push(t.getTime() / 86400000)) break;
+    }
+    else break;
+  }
+  return { days: days.filter(d => !ev.exdays[d]), unsupported: unsupported };
+}
+
+// Raw events -> the events that touch firstDay..lastDay, as small plain objects, sorted
+function bubblesCalWindow_(events, firstDay, lastDay) {
+  // a one-off edit of a repeating event (RECURRENCE-ID) replaces that day of the series
+  const replaced = {};
+  events.forEach(e => { if (e.recurrenceDay !== undefined && e.uid) (replaced[e.uid] = replaced[e.uid] || {})[e.recurrenceDay] = true; });
+  const found = [];
+  let skippedRules = 0;
+  events.forEach(ev => {
+    if (!ev.start || ev.cancelled || !ev.title) return;
+    const allDay = ev.start.min === null;
+    // how long: all-day = whole days (the end date is the day AFTER); timed = minutes
+    let spanDays = 1, durMin = 0;
+    if (allDay) { if (ev.end && ev.end.day > ev.start.day) spanDays = ev.end.day - ev.start.day; }
+    else if (ev.end) { durMin = (ev.end.day * 1440 + (ev.end.min || 0)) - (ev.start.day * 1440 + ev.start.min); if (durMin < 0) durMin = 0; }
+    const rep = bubblesCalRepeat_(ev, lastDay);
+    if (rep.unsupported) skippedRules++;
+    const gone = (ev.recurrenceDay === undefined && ev.uid && replaced[ev.uid]) || {};
+    rep.days.forEach(day => {
+      if (gone[day]) return;
+      let endDay, endMin = null;
+      if (allDay) endDay = day + spanDays - 1;                                        // last day, inclusive
+      else { const endAbs = day * 1440 + ev.start.min + durMin; endDay = Math.floor(endAbs / 1440); endMin = endAbs - endDay * 1440; }
+      if (endDay < firstDay || day > lastDay) return;                                  // not in the window
+      if (!allDay && endDay === firstDay && endMin === 0 && durMin > 0 && endDay > day) return;   // ended exactly at midnight before the window
+      found.push({
+        title: ev.title, start: bubblesDayIso_(day), time: allDay ? null : bubblesHm_(ev.start.min),
+        end: bubblesDayIso_(endDay), end_time: allDay ? null : bubblesHm_(endMin), all_day: allDay, place: ev.place || ''
+      });
+    });
+  });
+  found.sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : (a.time || '') < (b.time || '') ? -1 : (a.time || '') > (b.time || '') ? 1 : 0);
+  return { events: found, skipped_rules: skippedRules, total_in_feed: events.length };
 }

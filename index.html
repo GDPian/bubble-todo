@@ -223,7 +223,7 @@
                border-radius: 6px; padding: 1px 5px; white-space: nowrap; }
   .small-select { width: auto; padding: 4px 6px; }
   .todo.overdue .dd { color: var(--error); }
-  .donerow { display: flex; align-items: center; gap: 8px; padding: 6px 2px; font-size: .85rem; color: var(--muted); }
+  .donerow { display: flex; align-items: center; gap: 8px; padding: 6px 2px; font-size: .85rem; color: var(--muted); cursor: pointer; }
   .donerow .tt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: line-through; }
   details summary { cursor: pointer; font-size: .75rem; letter-spacing: .08em; text-transform: uppercase;
                     color: var(--muted); font-weight: 600; }
@@ -463,6 +463,7 @@
       </label>
       <div class="wide form-actions">
         <button class="btn good" type="button" id="dComplete">✓ Complete</button>
+        <button class="btn good" type="button" id="dRestore" hidden>↩ Restore</button>
         <button class="btn" type="submit" id="dSave">Save</button>
         <button class="btn danger" type="button" id="dDelete">Delete</button>
         <button class="btn ghost" type="button" id="dClose">Close</button>
@@ -650,9 +651,11 @@ async function updateTask(id, fields) {
   if (!t) return false;
   const before = { ...t };
   Object.assign(t, fields);
-  render();
+  // A drawing problem must never stop the save reaching the cloud, so render() is guarded here
+  const draw = () => { try { render(); } catch (e) { console.error('render failed', e); appError('Screen did not redraw fully: ' + e.message); } };
+  draw();
   const { error } = await sb.from('tasks').update(fields).eq('id', id);
-  if (error) { Object.assign(t, before); render(); appError('Could not save: ' + error.message); return false; }
+  if (error) { Object.assign(t, before); draw(); appError('Could not save: ' + error.message); return false; }
   appError('');
   return true;
 }
@@ -1734,7 +1737,9 @@ function renderTodo() {
     row.querySelector('.dot').classList.add(t.tag);
     row.querySelector('.tt').textContent = t.title;
     row.querySelector('.dd').textContent = new Date(t.done_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-    row.querySelector('button').addEventListener('click', () => updateTask(t.id, { done_at: null }));
+    // Tap the row to open the task card (notes etc.); the Restore button undoes the completion straight away
+    row.addEventListener('click', () => openDetail(t.id));
+    row.querySelector('button').addEventListener('click', e => { e.stopPropagation(); updateTask(t.id, { done_at: null }); });
     dl.appendChild(row);
   });
 }
@@ -1838,7 +1843,10 @@ function openDetail(id) {
   $('dImp').value = t.importance;
   $('dImpVal').textContent = t.importance;
   $('dNotes').value = t.notes || '';
-  $('dMeta').textContent = t.done_at ? 'Completed' : dueLabel(t);
+  $('dMeta').textContent = t.done_at ? 'Completed ' + new Date(t.done_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : dueLabel(t);
+  // A finished task offers Restore instead of Complete
+  $('dComplete').hidden = !!t.done_at;
+  $('dRestore').hidden = !t.done_at;
   $('dMsg').textContent = '';
   $('detailOverlay').hidden = false;
 }
@@ -1868,6 +1876,15 @@ $('dComplete').onclick = () => {
   const id = detailId;
   closeDetail();
   completeTask(id, f);
+};
+
+// Restore a completed task from its card (keeps any edits made in the card)
+$('dRestore').onclick = () => {
+  const f = detailFields();
+  if (!f.title || (!f.due && !$('dSomeday').checked)) { $('dMsg').textContent = 'Title and due date are needed (or tick No deadline).'; return; }
+  const id = detailId;
+  closeDetail();
+  updateTask(id, { ...f, done_at: null });
 };
 
 $('dDelete').onclick = () => {

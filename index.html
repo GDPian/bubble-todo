@@ -91,6 +91,9 @@
     #calBody.wk .calEv .t { min-width: 0; font-size: .72rem; }
     #calBody.wk .calChip { font-size: .72rem; }
   }
+  .calTask { display: block; width: 100%; text-align: left; font: inherit; font-size: .85rem; color: var(--text);
+            background: none; border: 0; border-left: 3px solid var(--work); padding: 2px 0 2px 8px; margin-bottom: 3px; cursor: pointer; }
+  .calTask.personal { border-left-color: var(--personal); }
   .calDay.calEmpty { display: flex; gap: 8px; align-items: baseline; }   /* an empty day is one line, not two */
   .calDay.calEmpty h3 { margin: 0; min-width: 6.6em; }
   @media (min-width: 700px) { #calBody.wk .calDay.calEmpty { display: block; } #calBody.wk .calDay.calEmpty h3 { margin: 0 0 4px; min-width: 0; } }
@@ -743,9 +746,13 @@ function calDaySection(label, iso) {
   const day = document.createElement('div'); day.className = 'calDay';
   const h3 = document.createElement('h3'); h3.textContent = label; day.appendChild(h3);
   // an event is on this day if it starts on or before it and ends on or after it
-  const evs = calEvents.filter(e => e.start <= iso && (e.end || e.start) >= iso);
+  const evs = (calEvents || []).filter(e => e.start <= iso && (e.end || e.start) >= iso);
   const allDay = evs.filter(e => e.all_day), timed = evs.filter(e => !e.all_day);
-  if (!evs.length) {
+  // my own tasks due this day (anything overdue is shown once, on today; past days stay clean)
+  const isToday = iso === toISO(today());
+  const due = activeTasks().filter(t => (t.due === iso && iso >= toISO(today())) || (isToday && t.due < iso))
+    .sort((a, b) => b.importance - a.importance);
+  if (!evs.length && !due.length) {
     day.classList.add('calEmpty');
     const n = document.createElement('div'); n.className = 'calNone'; n.textContent = 'Nothing planned'; day.appendChild(n);
   }
@@ -769,6 +776,12 @@ function calDaySection(label, iso) {
     if (e.place) { const p = document.createElement('span'); p.className = 'p'; p.textContent = '@ ' + e.place; row.appendChild(p); }
     day.appendChild(row);
   });
+  due.forEach(t => {
+    const row = document.createElement('button'); row.className = 'calTask ' + t.tag;
+    row.textContent = '☐ ' + t.title + (t.due < iso ? ' (overdue)' : '');
+    row.addEventListener('click', () => openDetail(t.id));      // tap = the usual task card
+    day.appendChild(row);
+  });
   return day;
 }
 
@@ -782,7 +795,6 @@ function renderCalendar(msg) {
   $('calPrev').hidden = $('calNext').hidden = !week;
   $('calPrev').disabled = calWeek <= 0;
   $('calNext').disabled = calWeek >= 3;        // the feed is fetched 35 days ahead = about 4 weeks
-  if (!calEvents) { $('calRange').textContent = ''; return; }
   const t = today();
   const dayN = n => { const d = new Date(t); d.setDate(d.getDate() + n); return d; };
   const nice = d => d.toLocaleString('en-GB', { weekday: 'short' }) + ' ' + calShort(toISO(d));
@@ -1468,6 +1480,7 @@ function render() {
     field.appendChild(b);
   });
   renderTodo();
+  renderCalendar($('calMsg').textContent);   // tasks with due dates also show in the calendar
 }
 
 // How the to-do list is sorted (remembered on this device)

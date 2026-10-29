@@ -277,6 +277,11 @@
   .logrow .d { color: var(--muted); white-space: nowrap; }
   .logrow input { padding: 5px 8px; font-size: 14px; }
   .logrow .sync { color: var(--muted); font-style: italic; }
+  .logrow .body.withx { display: flex; gap: 6px; align-items: center; }
+  .logrow .body.withx input { flex: 1; min-width: 0; }
+  .logrow .x { background: transparent; border: 1px solid var(--panel-border); color: var(--muted); border-radius: 6px;
+               padding: 3px 8px; cursor: pointer; font-size: 13px; }
+  .today-box.past { margin-top: 8px; }
   .today-box { background: var(--bg); border: 1px solid var(--panel-border); border-radius: 12px; padding: 10px; margin: 6px 0; display: grid; gap: 8px; }
   .today-box textarea { font-size: 16px; }
   #hdChart svg { width: 100%; height: auto; display: block; }
@@ -1386,6 +1391,41 @@ async function saveNote(row, note, say) {
   return true;
 }
 
+// Log a day you forgot to tick (manual habits only). Returns a message to show, or '' when it worked.
+async function addPastTick(h, iso) {
+  const todayStr = toISO(today());
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return 'Pick a day first.';
+  if (iso >= todayStr) return 'Pick a day before today (use the bubble for today).';
+  const target = h.kind === 'weekly' ? 1 : (h.daily_target || 1);        // a logged past day counts as fully done
+  const have = fullLogs.concat(logs).find(l => l.habit_id === h.id && l.done_on === iso && !l.synced && !String(l.id).startsWith('tmp-'));
+  if (have && (have.count || 1) >= target) return 'That day is already ticked.';
+  let row = have;
+  if (have) {
+    const { error } = await sb.from('habit_log').update({ count: target }).eq('id', have.id);
+    if (error) return 'Could not save: ' + error.message;
+    [fullLogs, logs].forEach(arr => { const f = arr.find(l => l.id === have.id); if (f) f.count = target; });
+  } else {
+    const { data, error } = await sb.from('habit_log')
+      .insert({ habit_id: h.id, done_on: iso, count: target }).select('id,habit_id,done_on,note,count').single();
+    if (error) return 'Could not save: ' + error.message;
+    row = data;
+    fullLogs.push(row);
+    const cut = new Date(today()); cut.setDate(cut.getDate() - 90);
+    if (iso >= toISO(cut)) logs.push(row);                                // the strip only keeps 90 days
+  }
+  return '';
+}
+
+// Remove one earlier day's tick (the ✕ in the log)
+async function removePastTick(h, row) {
+  if (!row || String(row.id).startsWith('tmp-')) return 'Still saving, try again in a second.';
+  const { error } = await sb.from('habit_log').delete().eq('id', row.id);
+  if (error) return 'Could not remove: ' + error.message;
+  fullLogs = fullLogs.filter(l => l.id !== row.id);
+  logs = logs.filter(l => l.id !== row.id);
+  return '';
+}
+
 /* --- the card for one habit --- */
 let cardId = null, logShown = 40;
 
@@ -1448,6 +1488,24 @@ function buildHabitToday(h, opts) {
     if (canRest) wrap.querySelector('.rest').onclick = () => toggleRest(h).then(() => { if (cardId === h.id) { buildHabitToday(h, {}); renderHabitCard(h); } });
   }
   box.appendChild(wrap);
+
+  // Forgot to tick a day? Pick it here (not for habits that tick themselves from the sheet)
+  if (!h.source_url) {
+    const yest = new Date(today()); yest.setDate(yest.getDate() - 1);
+    const past = document.createElement('div'); past.className = 'today-box past';
+    past.innerHTML = '<div class="meta">Forgot to tick a day? Log it here.</div>' +
+      '<div class="form-actions"><input type="date" class="pastDate"><button class="btn ghost addpast">Add that day</button></div>' +
+      '<div class="meta rowmsg"></div>';
+    const inp = past.querySelector('.pastDate');
+    inp.max = toISO(yest); inp.value = toISO(yest);
+    past.querySelector('.addpast').onclick = async () => {
+      const say = past.querySelector('.rowmsg'); say.textContent = 'Saving…';
+      const problem = await addPastTick(h, inp.value);
+      say.textContent = problem || 'Added ✓';
+      if (!problem) { renderHabits(); if (cardId === h.id) { renderHabitCard(h); } }
+    };
+    box.appendChild(past);
+  }
 }
 
 // Line chart of a series [{d:'2026-10-28', v:102.2}, …] (used for trend weight)
@@ -1551,6 +1609,17 @@ function renderHabitCard(h) {
         inp.style.borderColor = ok ? 'var(--ok)' : 'var(--error)';
       });
       body.appendChild(inp);
+      // ✕ removes this day's tick (for a tick logged by mistake, or on the wrong day)
+      const x = document.createElement('button');
+      x.className = 'x'; x.type = 'button'; x.textContent = '✕'; x.title = 'Remove this day';
+      x.onclick = async () => {
+        if (!confirm('Remove the tick for ' + dayLabel(e.date) + '?')) return;
+        const problem = await removePastTick(h, e.row);
+        if (problem) { $('hdMsg').textContent = problem; return; }
+        $('hdMsg').textContent = '';
+        renderHabits(); renderHabitCard(h); buildHabitToday(h, {});
+      };
+      body.classList.add('withx'); body.appendChild(x);
     }
     log.appendChild(r);
   });

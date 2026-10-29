@@ -83,12 +83,25 @@
   #calBody { display: flex; flex-direction: column; gap: 8px; }
   .calDay h3 { margin: 0 0 4px; font-size: .75rem; font-weight: 600; color: var(--muted);
                text-transform: uppercase; letter-spacing: .04em; }
+  /* Week view: Monday to Sunday side by side on a wide screen, stacked on a phone */
+  @media (min-width: 700px) {
+    #calBody.wk { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+    #calBody.wk .calDay { background: rgba(255,255,255,.03); border-radius: 8px; padding: 6px; min-width: 0; }
+    #calBody.wk .calEv { flex-direction: column; gap: 0; padding-left: 6px; }
+    #calBody.wk .calEv .t { min-width: 0; font-size: .72rem; }
+    #calBody.wk .calChip { font-size: .72rem; }
+  }
+  .calDay.calEmpty { display: flex; gap: 8px; align-items: baseline; }   /* an empty day is one line, not two */
+  .calDay.calEmpty h3 { margin: 0; min-width: 6.6em; }
+  @media (min-width: 700px) { #calBody.wk .calDay.calEmpty { display: block; } #calBody.wk .calDay.calEmpty h3 { margin: 0 0 4px; min-width: 0; } }
+  .calDay.past { opacity: .45; }
+  .calDay.isToday { outline: 1px solid var(--cal); border-radius: 8px; }
   .calNone { font-size: .85rem; color: var(--muted); }
   .calChips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
   .calChip { font-size: .78rem; padding: 2px 9px; border-radius: 999px; color: #0f172a; background: var(--cal); }
   .calEv { display: flex; gap: 8px; align-items: baseline; font-size: .88rem; padding: 2px 0 2px 8px;
            border-left: 3px solid var(--cal); margin-bottom: 3px; }
-  .calEv .t { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 5.2em; }
+  .calEv .t { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 6.6em; }
   .calEv .p { color: var(--muted); font-size: .78rem; }
 
   /* ---------- Habits strip ---------- */
@@ -698,7 +711,7 @@ function calendarUrl() {
   const h = habits.find(x => x.source_url && x.source_url.startsWith('https://'));
   if (!h) return null;
   const u = h.source_url.replace(/([?&])what=[^&]*/, '$1what=calendar');
-  return (u.includes('what=calendar') ? u : u + '&what=calendar') + '&days=28';
+  return (u.includes('what=calendar') ? u : u + '&what=calendar') + '&days=35&back=6';
 }
 
 async function loadCalendar() {
@@ -722,7 +735,7 @@ function calShort(iso) {
   return d.getDate() + ' ' + d.toLocaleString('en-GB', { month: 'short' });
 }
 
-let calMode = 'day';    // 'day' = today + tomorrow, 'week' = 7 days at a time
+let calMode = 'week';   // 'week' = Monday to Sunday (default), 'day' = today + tomorrow only
 let calWeek = 0;        // which week in week view: 0 = starting today, 1 = the next 7 days, ...
 
 // One day's heading and events, added to the calendar box
@@ -733,6 +746,7 @@ function calDaySection(label, iso) {
   const evs = calEvents.filter(e => e.start <= iso && (e.end || e.start) >= iso);
   const allDay = evs.filter(e => e.all_day), timed = evs.filter(e => !e.all_day);
   if (!evs.length) {
+    day.classList.add('calEmpty');
     const n = document.createElement('div'); n.className = 'calNone'; n.textContent = 'Nothing planned'; day.appendChild(n);
   }
   if (allDay.length) {
@@ -761,12 +775,13 @@ function calDaySection(label, iso) {
 function renderCalendar(msg) {
   const body = $('calBody');
   body.textContent = '';                       // titles go in with textContent only, never innerHTML
+  body.classList.remove('wk');
   $('calMsg').textContent = msg || '';
   const week = calMode === 'week';
   $('calMode').textContent = week ? 'Today' : 'Week';
   $('calPrev').hidden = $('calNext').hidden = !week;
   $('calPrev').disabled = calWeek <= 0;
-  $('calNext').disabled = calWeek >= 3;        // the feed is fetched 28 days ahead = 4 weeks
+  $('calNext').disabled = calWeek >= 3;        // the feed is fetched 35 days ahead = about 4 weeks
   if (!calEvents) { $('calRange').textContent = ''; return; }
   const t = today();
   const dayN = n => { const d = new Date(t); d.setDate(d.getDate() + n); return d; };
@@ -777,10 +792,16 @@ function renderCalendar(msg) {
     body.appendChild(calDaySection('Tomorrow', toISO(dayN(1))));
     return;
   }
-  const first = calWeek * 7;
+  // Monday of this week (JS: Sunday = 0, so Monday is 1)
+  const monOffset = -((t.getDay() + 6) % 7);
+  const first = monOffset + calWeek * 7;
   $('calRange').textContent = calShort(toISO(dayN(first))) + ' – ' + calShort(toISO(dayN(first + 6)));
+  body.classList.add('wk');
   for (let i = first; i < first + 7; i++) {
-    body.appendChild(calDaySection(i === 0 ? 'Today · ' + nice(dayN(i)) : nice(dayN(i)), toISO(dayN(i))));
+    const sec = calDaySection(nice(dayN(i)), toISO(dayN(i)));
+    if (i < 0) sec.classList.add('past');
+    if (i === 0) sec.classList.add('isToday');
+    body.appendChild(sec);
   }
 }
 

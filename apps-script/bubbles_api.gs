@@ -17,7 +17,7 @@
  * Other links (open them in a browser):
  *       ?what=exercises&token=…                  every exercise and which of Push / Pull / Legs it counts as
  *       ?what=steps_set&date=2026-10-28&steps=8123&token=…     what the iPhone Shortcut calls to save steps
- *       ?what=calendar&token=…                   the next 30 days of the family calendar (add &days=14 for fewer)
+ *       ?what=calendar&token=…                   the next 30 days of the family calendar (add &days=14 for fewer, &back=6 to include the last 6 days)
  *
  * CALENDAR SETUP (once): Project Settings > Script properties > Add property:
  *       name  FAMILY_CAL_URL    value  the calendar link from Family Daily (the https://app.familydaily.app/api/calendar/... one)
@@ -316,7 +316,8 @@ function bubblesCalendar_(p) {
   url = url.trim().replace(/^webcal:/i, 'https:');
   const days = Math.max(1, Math.min(90, Math.round(Number(p.days)) || BUBBLES_CAL_DAYS));
   const todayIso = Utilities.formatDate(new Date(), BUBBLES_CAL_TZ, 'yyyy-MM-dd');
-  const key = 'cal_' + todayIso + '_' + days;     // includes the date so "today" is never stale after midnight
+  const back = Math.max(0, Math.min(7, Math.round(Number(p.back)) || 0));   // also return this many days BEFORE today (for a Monday-start week)
+  const key = 'cal_' + todayIso + '_' + days + '_' + back;     // includes the date so "today" is never stale after midnight
   const cache = CacheService.getScriptCache();
   if (!p.refresh) {
     const hit = cache.get(key);
@@ -328,9 +329,9 @@ function bubblesCalendar_(p) {
   if (text.indexOf('BEGIN:VCALENDAR') < 0) return { error: 'The calendar link did not return a calendar' };
 
   const todayDay = bubblesDay_(todayIso);
-  const out = bubblesCalWindow_(bubblesIcsEvents_(text), todayDay, todayDay + days - 1);
+  const out = bubblesCalWindow_(bubblesIcsEvents_(text), todayDay - back, todayDay + days - 1);
   out.generated = Utilities.formatDate(new Date(), BUBBLES_CAL_TZ, "yyyy-MM-dd'T'HH:mm");
-  out.from = todayIso;
+  out.from = bubblesDayIso_(todayDay - back);
   out.to = bubblesDayIso_(todayDay + days - 1);
   const json = JSON.stringify(out);
   if (json.length < 90000) cache.put(key, json, BUBBLES_CAL_CACHE_SECS);   // cache values are limited to ~100KB

@@ -133,6 +133,7 @@
   .habit .n { font-weight: 700; overflow-wrap: anywhere; }
   .habit .l { margin-top: 2px; font-size: .9em; opacity: .85; white-space: nowrap; }
   .habit.done { background: transparent; box-shadow: none; border-color: var(--c); color: var(--c); }
+  .habit.rest { border-style: dashed; opacity: .75; }   /* a chosen rest day: calm, not a tick */
   .habit.capped { animation: pulse 1.4s ease-in-out infinite; outline: 3px solid rgba(239,68,68,.8); }
   .habit { position: relative; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .habit .n, .habit .l { pointer-events: none; }
@@ -261,6 +262,7 @@
   .heat .cell.none { visibility: hidden; }
   /* a day the sheet has a figure for but the goal was not reached (e.g. 4,665 steps): light red */
   .heat .cell.miss { background: rgba(248,113,113,.35); border-color: rgba(248,113,113,.55); }
+  .heat .cell.rest { background: rgba(96,165,250,.3); border-color: rgba(96,165,250,.6); color: var(--text); }
   .logrow.miss .d, .logrow.miss .sync { color: #f87171; }
   /* workout calendar: bigger cells with a letter code, one colour per type */
   .heat.typed { grid-template-rows: repeat(7, 24px); grid-auto-columns: 24px; }
@@ -605,6 +607,8 @@ const $ = id => document.getElementById(id);
 let tasks = [];            // every task row, active AND completed
 let habits = [];           // rows from the "habits" table
 let logs = [];             // rows from "habit_log" (last 90 days) plus synced ticks
+let restDays = new Set();  // rest days for weekly habits, as "habitId|YYYY-MM-DD" (table "habit_rest"; they are NOT ticks)
+let restMissing = false;   // true until sql/009_rest_days.sql has been run
 let currentUser = null;    // who is signed in
 
 /* ---------- 1. Date helpers ---------- */
@@ -720,6 +724,11 @@ async function loadHabits() {
   const l = await sb.from('habit_log').select('id,habit_id,done_on,note,count').gte('done_on', toISO(since));
   if (l.error) { habitError('Could not load habit history: ' + l.error.message); return; }
   logs = l.data;
+  // Rest days (a separate table, so they can never count as a tick). If the table is not there yet, carry on without them.
+  const since2 = new Date(today()); since2.setDate(since2.getDate() - 200);
+  const rd = await sb.from('habit_rest').select('habit_id,rest_on').gte('rest_on', toISO(since2));
+  restMissing = !!rd.error;
+  restDays = new Set(rd.error ? [] : rd.data.map(r => r.habit_id + '|' + r.rest_on));
   habitError('');
   renderHabits();
 
@@ -1040,7 +1049,7 @@ function habitState(h) {
   // a day counts once it has all its ticks (e.g. 4 of 4 glasses of water); sheet days always count
   const dates = new Set(logs.filter(l => l.habit_id === h.id && (l.synced || (l.count || 1) >= target)).map(l => l.done_on));
   const doneToday = dates.has(todayStr);
-  let steps = 0, label = '', done = doneToday;
+  let steps = 0, label = '', done = doneToday, rest = false;
 
   if (h.kind === 'weekly') {
     // Weekly target (e.g. gym 3x). Week runs Monday–Sunday.
@@ -1054,6 +1063,8 @@ function habitState(h) {
     if (!doneToday && remaining > 0) steps = Math.max(0, 2 - slack);
     done = doneToday || remaining === 0;                    // target met = calm, even if not today
     label = `${count}/${h.target_per_week}`;
+    // A rest day today: calm for now (no growth), counter unchanged. Training anyway still counts as a session.
+    if (!doneToday && isRest(h, todayStr)) { rest = true; steps = 0; done = true; }
   } else {
     // Daily habit: grows after grace_days fully missed days.
     let last = null; dates.forEach(d => { if (!last || d > last) last = d; });
@@ -1076,7 +1087,33 @@ function habitState(h) {
     }
   }
   if (h.syncError) label = '⚠ sync';
-  return { steps, label, done };
+  return { steps, label, done, rest };
+}
+
+// Rest days (weekly habits only). They are kept apart from ticks so the counter never moves.
+const isRest = (h, iso) => restDays.has(h.id + '|' + iso);
+
+async function toggleRest(h) {
+  if (h.kind !== 'weekly') return false;
+  if (restMissing) {
+    const m = 'Rest days need a one-off database step: run sql/009_rest_days.sql in the Supabase SQL Editor.';
+    habitError(m); $('hdMsg').textContent = m; return false;   // also shown inside the open habit card
+  }
+  if (h.busy) return false;
+  h.busy = true;
+  const todayStr = toISO(today()), key = h.id + '|' + todayStr, had = restDays.has(key);
+  if (had) restDays.delete(key); else restDays.add(key);
+  renderHabits();
+  const q = sb.from('habit_rest');
+  const { error } = had ? await q.delete().eq('habit_id', String(h.id)).eq('rest_on', todayStr)
+                        : await q.insert({ habit_id: String(h.id), rest_on: todayStr });
+  h.busy = false;
+  if (error) {
+    if (had) restDays.add(key); else restDays.delete(key);
+    renderHabits(); habitError('Could not save the rest day: ' + error.message); $('hdMsg').textContent = 'Could not save the rest day: ' + error.message; return false;
+  }
+  habitError('');
+  return true;
 }
 
 function renderHabits() {
@@ -1090,12 +1127,12 @@ function renderHabits() {
     const capped = !s.done && s.steps >= HABIT_CAP;
     const size = (s.done ? HABIT_DONE : HABIT_BASE + Math.min(s.steps, HABIT_CAP) * HABIT_STEP) * HABIT_SCALE;   // habits always stay at Medium
     const b = document.createElement('button');
-    b.className = `habit ${h.category}` + (s.done ? ' done' : '') + (capped ? ' capped' : '');
+    b.className = `habit ${h.category}` + (s.done ? ' done' : '') + (s.rest ? ' rest' : '') + (capped ? ' capped' : '');
     b.style.width = b.style.height = size + 'px';
     b.title = h.name;
     b.innerHTML = '<span class="n"></span><span class="l"></span>';
     b.querySelector('.n').textContent = h.name;
-    b.querySelector('.l').textContent = (s.done ? '✓ ' : '') + s.label;
+    b.querySelector('.l').textContent = (s.rest ? '😴 ' : s.done ? '✓ ' : '') + s.label;
     b.addEventListener('click', () => { if (!habitDragJustEnded) onHabitTap(h); });
     attachHabitDrag(b, h);
     strip.appendChild(b);
@@ -1194,7 +1231,10 @@ async function reorderHabits(from, to) {
 function onHabitTap(h) {
   const todayStr = toISO(today()), target = h.kind === 'weekly' ? 1 : (h.daily_target || 1);
   const full = logs.some(l => l.habit_id === h.id && l.done_on === todayStr && (l.synced || (l.count || 1) >= target));
-  if (full) openHabitCard(h.id); else tickHabit(h);
+  // A weekly habit that fills itself from the sheet (the gym) is never ticked by hand: tapping opens its card,
+  // where you can mark a rest day. Same for any weekly habit already on a rest day (so it can be undone).
+  const selfTicking = h.kind === 'weekly' && (!!h.source_url || isRest(h, todayStr));
+  if (full || selfTicking) openHabitCard(h.id); else tickHabit(h);
 }
 
 // Tick a habit for today (screen updates first, saves in the background).
@@ -1395,9 +1435,17 @@ function buildHabitToday(h, opts) {
     if (opts.focusNote) setTimeout(() => ta.focus(), 60);
   } else if (synced) {
     wrap.innerHTML = '<div class="meta">✓ Ticked itself from your sheet today. Change it in the sheet.</div>';
+  } else if (h.kind === 'weekly' && isRest(h, todayStr)) {
+    wrap.innerHTML = '<div class="meta">😴 Rest day today. The counter is unchanged. If you train anyway it will still count.</div>' +
+      '<div class="form-actions"><button class="btn ghost unrest">Undo rest day</button></div>';
+    wrap.querySelector('.unrest').onclick = () => toggleRest(h).then(() => { if (cardId === h.id) { buildHabitToday(h, {}); renderHabitCard(h); } });
   } else {
-    wrap.innerHTML = '<div class="meta">Not done today.</div><div class="form-actions"><button class="btn good tick">Tick it now</button></div>';
+    const canRest = h.kind === 'weekly';
+    wrap.innerHTML = '<div class="meta">' + (h.source_url ? 'Not done today. It ticks itself from your sheet after a session.' : 'Not done today.') + '</div>' +
+      '<div class="form-actions">' + (canRest ? '<button class="btn good rest">😴 Rest day today</button>' : '') +
+      '<button class="btn ' + (canRest ? 'ghost' : 'good') + ' tick">Tick it now</button></div>';
     wrap.querySelector('.tick').onclick = () => tickHabit(h).then(() => { if (cardId === h.id && !h.ask_note) { buildHabitToday(h, {}); renderHabitCard(h); } });
+    if (canRest) wrap.querySelector('.rest').onclick = () => toggleRest(h).then(() => { if (cardId === h.id) { buildHabitToday(h, {}); renderHabitCard(h); } });
   }
   box.appendChild(wrap);
 }
@@ -1469,14 +1517,17 @@ function renderHabitCard(h) {
     const iso = toISO(d), cell = document.createElement('div');
     const type = typed && st.set.has(iso) ? h.types[iso] : null;
     const missed = missedDays.has(iso);                  // light red: figure logged, goal not reached
-    cell.className = 'cell' + (d > t ? ' none' : st.set.has(iso) ? ' on' : missed ? ' miss' : '') + (iso === todayStr ? ' today' : '')
+    const rest = h.kind === 'weekly' && !st.set.has(iso) && isRest(h, iso);   // a chosen rest day (training anyway wins)
+    cell.className = 'cell' + (d > t ? ' none' : st.set.has(iso) ? ' on' : rest ? ' rest' : missed ? ' miss' : '') + (iso === todayStr ? ' today' : '')
                    + (type && TYPE_CODE[type] ? ' t-' + type : '');
     if (type && TYPE_CODE[type]) cell.textContent = TYPE_CODE[type];
-    cell.title = dayLabel(iso) + (type ? ' – ' + type : (h.values && h.values[iso] ? ' – ' + h.values[iso] : ''));
+    else if (rest && typed) cell.textContent = 'R';
+    cell.title = dayLabel(iso) + (rest ? ' – rest day' : type ? ' – ' + type : (h.values && h.values[iso] ? ' – ' + h.values[iso] : ''));
     heat.appendChild(cell);
   }
-  $('hdHeatKey').textContent = typed ? 'Ps = Push · Pl = Pull · L = Legs · Mx = Mixed (grey)'
-                             : missedDays.size ? 'Light red = logged but below goal' : '';
+  const hasRest = h.kind === 'weekly' && [...restDays].some(k => k.startsWith(h.id + '|'));
+  $('hdHeatKey').textContent = typed ? 'Ps = Push · Pl = Pull · L = Legs · Mx = Mixed (grey)' + (hasRest ? ' · R = rest day' : '')
+                             : missedDays.size ? 'Light red = logged but below goal' : (hasRest ? 'Blue = rest day' : '');
   if (typed) heat.scrollLeft = heat.scrollWidth;       // start scrolled to this week
 
   // log: newest first. Manual ticks get an editable note.

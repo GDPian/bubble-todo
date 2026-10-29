@@ -29,6 +29,7 @@
     --work: #3b82f6;        /* work bubbles = blue */
     --personal: #f59e0b;    /* personal bubbles = amber */
     --cal: #2dd4bf;         /* family calendar = teal */
+    --her: #c084fc;         /* her events (typed in with + Event) = purple */
     --error: #f87171;
     --ok: #34d399;
   }
@@ -81,6 +82,8 @@
 
   /* ---------- Calendar strip: today + tomorrow ---------- */
   #calBody { display: flex; flex-direction: column; gap: 8px; }
+  #calendar .panel-head { flex-wrap: wrap; gap: 6px; }
+  #calendar .btn { white-space: nowrap; }
   .calDay h3 { margin: 0 0 4px; font-size: .75rem; font-weight: 600; color: var(--muted);
                text-transform: uppercase; letter-spacing: .04em; }
   /* Week view: Monday to Sunday side by side on a wide screen, stacked on a phone */
@@ -91,6 +94,11 @@
     #calBody.wk .calEv .t { min-width: 0; font-size: .72rem; }
     #calBody.wk .calChip { font-size: .72rem; }
   }
+  .calEv.mine, .calChip.mine { cursor: pointer; }
+  .calEv.work, .calChip.work { --c: var(--work); }
+  .calEv.personal, .calChip.personal { --c: var(--personal); }
+  .calEv.her, .calChip.her { --c: var(--her); }
+  .bubble.someday { opacity: .8; }     /* no deadline: a little paler */
   .calTask { display: block; width: 100%; text-align: left; font: inherit; font-size: .85rem; color: var(--text);
             background: none; border: 0; border-left: 3px solid var(--work); padding: 2px 0 2px 8px; margin-bottom: 3px; cursor: pointer; }
   .calTask.personal { border-left-color: var(--personal); }
@@ -99,11 +107,13 @@
   @media (min-width: 700px) { #calBody.wk .calDay.calEmpty { display: block; } #calBody.wk .calDay.calEmpty h3 { margin: 0 0 4px; min-width: 0; } }
   .calDay.past { opacity: .45; }
   .calDay.isToday { outline: 1px solid var(--cal); border-radius: 8px; }
+  .chk { display: flex; gap: 6px; align-items: center; margin-top: 4px; font-size: .8rem; color: var(--muted); }
+  .chk input { width: auto; }
   .calNone { font-size: .85rem; color: var(--muted); }
   .calChips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
-  .calChip { font-size: .78rem; padding: 2px 9px; border-radius: 999px; color: #0f172a; background: var(--cal); }
-  .calEv { display: flex; gap: 8px; align-items: baseline; font-size: .88rem; padding: 2px 0 2px 8px;
-           border-left: 3px solid var(--cal); margin-bottom: 3px; }
+  .calChip { --c: var(--cal); font-size: .78rem; padding: 2px 9px; border-radius: 999px; color: #0f172a; background: var(--c); }
+  .calEv { --c: var(--cal); display: flex; gap: 8px; align-items: baseline; font-size: .88rem; padding: 2px 0 2px 8px;
+           border-left: 3px solid var(--c); margin-bottom: 3px; }
   .calEv .t { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 6.6em; }
   .calEv .p { color: var(--muted); font-size: .78rem; }
 
@@ -133,8 +143,8 @@
   #appView { display: none; gap: 12px; grid-template-columns: 1fr; }
   body:not(.signedout):not(.needsetup) #appView { display: grid; }
   .main { display: grid; gap: 12px; grid-template-columns: 1fr; }
-  .side { display: grid; gap: 12px; align-content: start; }
-  @media (min-width: 900px) { .main { grid-template-columns: 1fr 340px; } }
+  .side { display: grid; gap: 12px; align-content: start; min-width: 0; grid-template-columns: minmax(0, 1fr); }   /* min-width: a long task title must not widen the page */
+  @media (min-width: 900px) { .main { grid-template-columns: minmax(0, 1fr) 340px; } }
 
   /* ---------- Buttons and forms ---------- */
   button { font: inherit; cursor: pointer; }
@@ -341,6 +351,7 @@
       <span style="display:flex;gap:6px">
         <button class="btn ghost small" id="calPrev" hidden>‹</button>
         <button class="btn ghost small" id="calNext" hidden>›</button>
+        <button class="btn ghost small" id="calAdd">+ Event</button>
         <button class="btn ghost small" id="calMode">Week</button>
       </span>
     </div>
@@ -358,6 +369,7 @@
         </label>
         <label>Due date
           <input id="fDue" type="date" required>
+          <span class="chk"><input id="fSomeday" type="checkbox"> No deadline (someday)</span>
         </label>
         <label>Tag
           <select id="fTag">
@@ -433,6 +445,7 @@
       </label>
       <label>Due date
         <input id="dDue" type="date" required>
+        <span class="chk"><input id="dSomeday" type="checkbox"> No deadline (someday)</span>
       </label>
       <label>Tag
         <select id="dTag">
@@ -453,6 +466,40 @@
         <button class="btn ghost" type="button" id="dClose">Close</button>
       </div>
       <div class="wide msg err" id="dMsg"></div>
+    </form>
+  </div>
+</div>
+
+<!-- ============ Event card (+ Event) ============ -->
+<div class="overlay" id="evOverlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="Event">
+    <form id="evForm" class="fgrid" autocomplete="off">
+      <div class="wide sheet-head"><h2 id="evHead">Event</h2></div>
+      <label class="wide">Title
+        <input id="evTitle" required maxlength="80" placeholder="e.g. Her dinner with Mika">
+      </label>
+      <label>Date
+        <input id="evDate" type="date" required>
+      </label>
+      <label>Whose
+        <select id="evTag">
+          <option value="personal">Mine (personal)</option>
+          <option value="work">Work</option>
+          <option value="her">Hers</option>
+        </select>
+      </label>
+      <label>Starts <span class="meta">(empty = all day)</span>
+        <input id="evStart" type="time">
+      </label>
+      <label>Ends <span class="meta">(optional)</span>
+        <input id="evEnd" type="time">
+      </label>
+      <div class="wide form-actions">
+        <button class="btn" type="submit" id="evSave">Save</button>
+        <button class="btn danger" type="button" id="evDelete" hidden>Delete</button>
+        <button class="btn ghost" type="button" id="evClose">Close</button>
+      </div>
+      <div class="wide msg err" id="evMsg"></div>
     </form>
   </div>
 </div>
@@ -546,7 +593,8 @@ function toISO(date) {
   const p = n => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}`;
 }
-function daysLeft(task) { return Math.round((parseDate(task.due) - today()) / 86400000); }
+// A task with no due date ('someday') counts as far away: smallest bubble, never overdue
+function daysLeft(task) { return task.due ? Math.round((parseDate(task.due) - today()) / 86400000) : 999; }
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
@@ -708,6 +756,8 @@ async function syncHabit(h) {
 
 /* ---------- Calendar strip (read-only, from the Apps Script ?what=calendar link) ---------- */
 let calEvents = null;   // null = not loaded yet
+let evMissing = false;  // true when the events table has not been created yet (007 SQL)
+let myEvents = [];      // events typed in with + Event (stored in Supabase)
 
 // The calendar link is the same web app as the habit Sync URLs, just with what=calendar
 function calendarUrl() {
@@ -746,11 +796,17 @@ function calDaySection(label, iso) {
   const day = document.createElement('div'); day.className = 'calDay';
   const h3 = document.createElement('h3'); h3.textContent = label; day.appendChild(h3);
   // an event is on this day if it starts on or before it and ends on or after it
-  const evs = (calEvents || []).filter(e => e.start <= iso && (e.end || e.start) >= iso);
+  // family-calendar events that touch this day, plus my own typed-in events for this day
+  const family = (calEvents || []).filter(e => e.start <= iso && (e.end || e.start) >= iso);
+  const mine = myEvents.filter(x => x.on_date === iso).map(x => ({
+    title: x.title, start: iso, end: iso, all_day: !x.start_time, tag: x.tag, evId: x.id,
+    time: x.start_time ? x.start_time.slice(0, 5) : null, end_time: x.end_time ? x.end_time.slice(0, 5) : null }));
+  const evs = family.concat(mine);
   const allDay = evs.filter(e => e.all_day), timed = evs.filter(e => !e.all_day);
+  timed.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
   // my own tasks due this day (anything overdue is shown once, on today; past days stay clean)
   const isToday = iso === toISO(today());
-  const due = activeTasks().filter(t => (t.due === iso && iso >= toISO(today())) || (isToday && t.due < iso))
+  const due = activeTasks().filter(t => t.due && ((t.due === iso && iso >= toISO(today())) || (isToday && t.due < iso)))
     .sort((a, b) => b.importance - a.importance);
   if (!evs.length && !due.length) {
     day.classList.add('calEmpty');
@@ -759,14 +815,16 @@ function calDaySection(label, iso) {
   if (allDay.length) {
     const chips = document.createElement('div'); chips.className = 'calChips';
     allDay.forEach(e => {
-      const c = document.createElement('span'); c.className = 'calChip';
+      const c = document.createElement('span'); c.className = 'calChip' + (e.evId ? ' mine ' + e.tag : '');
+      if (e.evId) c.addEventListener('click', () => openEvent(e.evId));
       c.textContent = e.title + (e.end && e.end > iso ? ' → ' + calShort(e.end) : '');
       chips.appendChild(c);
     });
     day.appendChild(chips);
   }
   timed.forEach(e => {
-    const row = document.createElement('div'); row.className = 'calEv';
+    const row = document.createElement('div'); row.className = 'calEv' + (e.evId ? ' mine ' + e.tag : '');
+    if (e.evId) row.addEventListener('click', () => openEvent(e.evId));      // tap my own event = edit it
     const tm = document.createElement('span'); tm.className = 't';
     // show the start time; add the end only if it is on the same day and differs
     tm.textContent = (e.start < iso ? 'cont.' : e.time) +
@@ -789,7 +847,7 @@ function renderCalendar(msg) {
   const body = $('calBody');
   body.textContent = '';                       // titles go in with textContent only, never innerHTML
   body.classList.remove('wk');
-  $('calMsg').textContent = msg || '';
+  $('calMsg').textContent = msg || (evMissing ? 'Events table missing – run sql/007_someday_and_events.sql in Supabase' : '');
   const week = calMode === 'week';
   $('calMode').textContent = week ? 'Today' : 'Week';
   $('calPrev').hidden = $('calNext').hidden = !week;
@@ -817,12 +875,75 @@ function renderCalendar(msg) {
   }
 }
 
+/* ---------- Events I type in myself (+ Event) ---------- */
+async function loadEvents() {
+  const { data, error } = await sb.from('events').select('*').order('on_date');
+  if (error) {
+    // most likely the 007 SQL has not been run yet
+    myEvents = []; evMissing = true;
+    renderCalendar($('calMsg').textContent);
+    return;
+  }
+  evMissing = false;
+  myEvents = data;
+  renderCalendar($('calMsg').textContent);
+}
+
+let evId = null;      // null = adding a new event
+
+function openEvent(id, dateIso) {
+  const e = id ? myEvents.find(x => x.id === id) : null;
+  if (id && !e) return;
+  evId = id;
+  $('evHead').textContent = e ? 'Edit event' : 'New event';
+  $('evTitle').value = e ? e.title : '';
+  $('evDate').value = e ? e.on_date : (dateIso || toISO(today()));
+  $('evTag').value = e ? e.tag : 'personal';
+  $('evStart').value = e && e.start_time ? e.start_time.slice(0, 5) : '';
+  $('evEnd').value = e && e.end_time ? e.end_time.slice(0, 5) : '';
+  $('evDelete').hidden = !e;
+  $('evMsg').textContent = '';
+  $('evOverlay').hidden = false;
+  if (!e) $('evTitle').focus();
+}
+function closeEvent() { evId = null; $('evOverlay').hidden = true; }
+
+$('calAdd').onclick = () => openEvent(null);
+$('evClose').onclick = closeEvent;
+$('evOverlay').addEventListener('click', e => { if (e.target === $('evOverlay')) closeEvent(); });
+
+$('evForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const row = { title: $('evTitle').value.trim(), on_date: $('evDate').value, tag: $('evTag').value,
+                start_time: $('evStart').value || null, end_time: $('evEnd').value || null };
+  if (!row.title || !row.on_date) return;
+  if (row.end_time && !row.start_time) { $('evMsg').textContent = 'Add a start time, or clear the end time.'; return; }
+  $('evSave').disabled = true;
+  const r = evId ? await sb.from('events').update(row).eq('id', evId).select().single()
+                 : await sb.from('events').insert(row).select().single();
+  $('evSave').disabled = false;
+  if (r.error) { $('evMsg').textContent = 'Could not save: ' + r.error.message; return; }
+  if (evId) myEvents = myEvents.map(x => x.id === evId ? r.data : x); else myEvents.push(r.data);
+  closeEvent();
+  renderCalendar($('calMsg').textContent);
+});
+
+$('evDelete').onclick = async () => {
+  if (!confirm('Delete this event?')) return;
+  const id = evId;
+  const { error } = await sb.from('events').delete().eq('id', id);
+  if (error) { $('evMsg').textContent = 'Could not delete: ' + error.message; return; }
+  myEvents = myEvents.filter(x => x.id !== id);
+  closeEvent();
+  renderCalendar($('calMsg').textContent);
+};
+
 $('calMode').addEventListener('click', () => { calMode = calMode === 'week' ? 'day' : 'week'; calWeek = 0; renderCalendar(''); });
 $('calPrev').addEventListener('click', () => { if (calWeek > 0) { calWeek--; renderCalendar(''); } });
 $('calNext').addEventListener('click', () => { if (calWeek < 3) { calWeek++; renderCalendar(''); } });
 
 // Calendar needs the habits loaded first (it borrows their Sync URL), so it runs after them
-function loadAll() { return Promise.all([loadTasks(), loadHabits().then(loadCalendar)]); }
+function loadAll() { return Promise.all([loadTasks(), loadHabits().then(loadCalendar), loadEvents()]); }
 
 // How should a habit look right now: growth steps, label, and whether it counts as done.
 function habitState(h) {
@@ -1382,7 +1503,7 @@ function onSession(session) {
     loadAll();
   } else {
     currentUser = null;
-    tasks = []; habits = []; logs = [];
+    tasks = []; habits = []; logs = []; myEvents = [];
     closeDetail(); closeHabitCard(); $('habitOverlay').hidden = true; $('histOverlay').hidden = true; fullLogs = [];
     document.body.classList.add('signedout');
   }
@@ -1448,6 +1569,7 @@ function computeLayout() {
 /* ---------- 5. Drawing ---------- */
 
 function dueLabel(task) {
+  if (!task.due) return 'Someday';
   const n = daysLeft(task);
   if (n < 0)  return `${-n}d overdue`;
   if (n === 0) return 'Today';
@@ -1466,7 +1588,7 @@ function render() {
 
   computeLayout().forEach(({ t, r, size, x, y }) => {
     const b = document.createElement('button');
-    b.className = `bubble ${t.tag}` + (daysLeft(t) < 0 ? ' overdue' : '');
+    b.className = `bubble ${t.tag}` + (daysLeft(t) < 0 ? ' overdue' : '') + (t.due ? '' : ' someday');
     b.dataset.id = t.id;
     b.style.width = b.style.height = size + 'px';
     b.style.left = (x - r) + 'px';
@@ -1497,8 +1619,9 @@ function renderTodo() {
   const list = $('todoList');
   list.textContent = '';
   // Most important first (ties: soonest due), or soonest due first (ties: most important)
-  const byImportance = (a, b) => b.importance - a.importance || a.due.localeCompare(b.due);
-  const byDue = (a, b) => a.due.localeCompare(b.due) || b.importance - a.importance;
+  const dueKey = t => t.due || '9999-12-31';         // someday tasks sort last
+  const byImportance = (a, b) => b.importance - a.importance || dueKey(a).localeCompare(dueKey(b));
+  const byDue = (a, b) => dueKey(a).localeCompare(dueKey(b)) || b.importance - a.importance;
   const active = activeTasks().sort(todoSort === 'due' ? byDue : byImportance);
   $('todoCount').textContent = active.length ? `· ${active.length}` : '';
   if (!active.length) { const p = document.createElement('div'); p.className = 'meta'; p.textContent = 'Nothing to do 🎉'; list.appendChild(p); }
@@ -1613,12 +1736,19 @@ field.addEventListener('touchmove', e => {
 let detailId = null;
 const dForm = $('detailForm');
 
+// "No deadline" greys out the date box and drops its "required" rule
+function syncSomeday(dateBox, check) { dateBox.disabled = check.checked; dateBox.required = !check.checked; }
+$('dSomeday').onchange = () => syncSomeday($('dDue'), $('dSomeday'));
+$('fSomeday').onchange = () => syncSomeday($('fDue'), $('fSomeday'));
+
 function openDetail(id) {
   const t = tasks.find(x => x.id === id);
   if (!t) return;
   detailId = id;
   $('dTitle').value = t.title;
-  $('dDue').value = t.due;
+  $('dDue').value = t.due || toISO(today());
+  $('dSomeday').checked = !t.due;
+  syncSomeday($('dDue'), $('dSomeday'));
   $('dTag').value = t.tag;
   $('dImp').value = t.importance;
   $('dImpVal').textContent = t.importance;
@@ -1630,7 +1760,7 @@ function openDetail(id) {
 function closeDetail() { detailId = null; $('detailOverlay').hidden = true; }
 
 const detailFields = () => ({
-  title: $('dTitle').value.trim(), due: $('dDue').value, tag: $('dTag').value,
+  title: $('dTitle').value.trim(), due: $('dSomeday').checked ? null : $('dDue').value, tag: $('dTag').value,
   importance: Number($('dImp').value), notes: $('dNotes').value,
 });
 
@@ -1641,7 +1771,7 @@ $('detailOverlay').addEventListener('click', e => { if (e.target === $('detailOv
 dForm.addEventListener('submit', async e => {
   e.preventDefault();
   const f = detailFields();
-  if (!f.title || !f.due) return;
+  if (!f.title || (!f.due && !$('dSomeday').checked)) return;
   const id = detailId;
   closeDetail();
   await updateTask(id, f);
@@ -1649,7 +1779,7 @@ dForm.addEventListener('submit', async e => {
 
 $('dComplete').onclick = () => {
   const f = detailFields();
-  if (!f.title || !f.due) { $('dMsg').textContent = 'Title and due date are needed.'; return; }
+  if (!f.title || (!f.due && !$('dSomeday').checked)) { $('dMsg').textContent = 'Title and due date are needed (or tick No deadline).'; return; }
   const id = detailId;
   closeDetail();
   completeTask(id, f);
@@ -1666,8 +1796,8 @@ $('dDelete').onclick = () => {
 const form = $('addForm');
 const fTitle = $('fTitle'), fDue = $('fDue'), fImp = $('fImp'), fTag = $('fTag'), fImpVal = $('fImpVal');
 
-function openForm() { form.classList.add('open'); fDue.value = toISO(today()); fTitle.focus(); }
-function closeForm() { form.classList.remove('open'); form.reset(); fImpVal.textContent = 5; }
+function openForm() { form.classList.add('open'); fDue.value = toISO(today()); syncSomeday(fDue, $('fSomeday')); fTitle.focus(); }
+function closeForm() { form.classList.remove('open'); form.reset(); fImpVal.textContent = 5; syncSomeday(fDue, $('fSomeday')); }
 
 $('toggleForm').onclick = () => form.classList.contains('open') ? closeForm() : openForm();
 $('cancelForm').onclick = closeForm;
@@ -1676,10 +1806,11 @@ fImp.oninput = () => fImpVal.textContent = fImp.value;
 form.addEventListener('submit', async e => {
   e.preventDefault();
   const title = fTitle.value.trim();
-  if (!title || !fDue.value) return;
+  const someday = $('fSomeday').checked;
+  if (!title || (!someday && !fDue.value)) return;
   const btn = $('btnAdd');
   btn.disabled = true;
-  const ok = await addTask({ title, due: fDue.value, importance: Number(fImp.value), tag: fTag.value });
+  const ok = await addTask({ title, due: someday ? null : fDue.value, importance: Number(fImp.value), tag: fTag.value });
   btn.disabled = false;
   if (ok) { closeForm(); render(); }
 });
@@ -1810,7 +1941,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && cu
 // Escape closes whichever card is open
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  closeDetail(); closeHabitCard(); $('habitOverlay').hidden = true; $('histOverlay').hidden = true;
+  closeDetail(); closeHabitCard(); closeEvent(); $('habitOverlay').hidden = true; $('histOverlay').hidden = true;
 });
 
 /* ---------- 11. Home screen icon (drawn here so we need only one file) ---------- */

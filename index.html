@@ -690,6 +690,7 @@ const HABIT_DEFAULTS = [
 
 // Overall bubble size setting (Small / Medium / Large), remembered on this device.
 // 1 = the original big size; Medium is the default.
+const HABIT_SCALE = 0.75;   // habit bubbles are fixed at Medium; the selector only changes task bubbles
 let sizeScale = 0.75;
 try { const v = parseFloat(localStorage.getItem('bubbles.size')); if (v >= 0.5 && v <= 1.2) sizeScale = v; } catch (_) {}
 
@@ -1084,7 +1085,7 @@ function renderHabits() {
     const s = habitState(h);
     if (s.done) doneCount++;
     const capped = !s.done && s.steps >= HABIT_CAP;
-    const size = (s.done ? HABIT_DONE : HABIT_BASE + Math.min(s.steps, HABIT_CAP) * HABIT_STEP) * sizeScale;
+    const size = (s.done ? HABIT_DONE : HABIT_BASE + Math.min(s.steps, HABIT_CAP) * HABIT_STEP) * HABIT_SCALE;   // habits always stay at Medium
     const b = document.createElement('button');
     b.className = `habit ${h.category}` + (s.done ? ' done' : '') + (capped ? ' capped' : '');
     b.style.width = b.style.height = size + 'px';
@@ -1905,7 +1906,7 @@ if ($('sizeSel').value !== String(sizeScale)) $('sizeSel').value = '0.75';
 $('sizeSel').addEventListener('change', () => {
   sizeScale = parseFloat($('sizeSel').value);
   try { localStorage.setItem('bubbles.size', String(sizeScale)); } catch (_) {}
-  render(); renderHabits();
+  render();   // habits are not resized (see HABIT_SCALE)
 });
 
 /* ---------- 9. Habit settings screen ---------- */

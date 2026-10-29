@@ -29,6 +29,7 @@
     --work: #3b82f6;        /* work bubbles = blue */
     --personal: #f59e0b;    /* personal bubbles = amber */
     --cal: #2dd4bf;         /* family calendar = teal */
+    --outline: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 -1px 0 #000, 0 1px 0 #000, -1px 0 0 #000, 1px 0 0 #000;   /* thin black outline for white text */
     --her: #c084fc;         /* her events (typed in with + Event) = purple */
     --error: #f87171;
     --ok: #34d399;
@@ -151,7 +152,8 @@
   button { font: inherit; cursor: pointer; }
   button:disabled { opacity: .5; cursor: default; }
   .btn { background: var(--work); color: #fff; border: 0; border-radius: 10px;
-         padding: 8px 14px; font-weight: 600; }
+         padding: 8px 14px; font-weight: 600; text-shadow: var(--outline); }
+  .btn.ghost, .btn.danger { text-shadow: none; }
   .btn.good { background: #059669; }
   .btn.ghost { background: transparent; border: 1px solid var(--panel-border); color: var(--muted); }
   .btn.danger { background: transparent; border: 1px solid #7f1d1d; color: var(--error); }
@@ -179,14 +181,14 @@
              border-radius: 8px; padding: 4px 8px; font-size: .8rem; z-index: 10; pointer-events: none; }
   .dragtip[hidden] { display: none; }
 
-  .bubble { position: absolute; border-radius: 50%; border: 0; color: #fff;
+  .bubble { position: absolute; border-radius: 50%; border: 0; color: #fff; text-shadow: var(--outline);
             display: flex; flex-direction: column; align-items: center; justify-content: center;
             padding: 6px; text-align: center; line-height: 1.15;
             -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
             box-shadow: inset 0 -6px 14px rgba(0,0,0,.25), inset 0 6px 14px rgba(255,255,255,.25);
             transition: left .4s, top .4s, width .4s, height .4s; }
   .bubble.work     { background: radial-gradient(circle at 30% 25%, #93c5fd, var(--work)); }
-  .bubble.personal { background: radial-gradient(circle at 30% 25%, #fde68a, var(--personal)); color: #3b2a05; }
+  .bubble.personal { background: radial-gradient(circle at 30% 25%, #fde68a, var(--personal)); color: #3b2a05; text-shadow: none; }
   .bubble .t { font-weight: 700; overflow: hidden; display: -webkit-box;
                -webkit-box-orient: vertical; -webkit-line-clamp: 3; word-break: break-word; pointer-events: none; }
   .bubble .d { opacity: .85; margin-top: 2px; font-size: .7em; white-space: nowrap; pointer-events: none; }
@@ -210,19 +212,19 @@
   .dot.work { background: var(--work); } .dot.personal { background: var(--personal); }
 
   /* ---------- To-do list + completed ---------- */
-  #todoList, #doneList { display: grid; gap: 6px; max-height: 340px; overflow: auto; }
+  #todoList, #doneList { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; max-height: 340px; overflow: auto; }
   .todo { display: flex; align-items: center; gap: 8px; background: var(--bg); width: 100%;
           border: 1px solid var(--panel-border); border-radius: 10px; padding: 9px 10px;
           text-align: left; color: var(--text); }
   .todo .dot { margin: 0; }
-  .todo .tt { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .todo .tt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .todo .dd { font-size: .72rem; color: var(--muted); white-space: nowrap; }
   .todo .imp { font-size: .7rem; color: var(--muted); border: 1px solid var(--panel-border);
                border-radius: 6px; padding: 1px 5px; white-space: nowrap; }
   .small-select { width: auto; padding: 4px 6px; }
   .todo.overdue .dd { color: var(--error); }
   .donerow { display: flex; align-items: center; gap: 8px; padding: 6px 2px; font-size: .85rem; color: var(--muted); }
-  .donerow .tt { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: line-through; }
+  .donerow .tt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: line-through; }
   details summary { cursor: pointer; font-size: .75rem; letter-spacing: .08em; text-transform: uppercase;
                     color: var(--muted); font-weight: 600; }
   details[open] summary { margin-bottom: 8px; }
@@ -407,7 +409,6 @@
             <option value="1">Large</option>
           </select>
         </label>
-        <button class="btn ghost small" id="resetData">Reset to sample data</button>
       </div>
     </section>
 
@@ -618,21 +619,6 @@ function daysLeft(task) { return task.due ? Math.round((parseDate(task.due) - to
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
-// Fake starter data (no ids – the database makes those). Dates are relative to today.
-function sampleTasks() {
-  const inDays = n => { const d = today(); d.setDate(d.getDate() + n); return toISO(d); };
-  const daysTo = dow => ((dow - today().getDay() + 7) % 7) || 7;   // days until the next Wed (3), Fri (5) …
-  return [
-    { title: 'Book Keiko',              due: inDays(3),               importance: 6, tag: 'personal' },
-    { title: 'Book Friday dinner',      due: inDays(daysTo(5) - 1),   importance: 7, tag: 'personal' },
-    { title: 'Plan Wednesday cooking',  due: inDays(daysTo(3) - 1),   importance: 5, tag: 'personal' },
-    { title: 'Submit Q4 pricing deck',  due: inDays(1),               importance: 9, tag: 'work' },
-    { title: 'Review deal approval',    due: inDays(0),               importance: 8, tag: 'work' },
-    { title: 'Update delegation doc',   due: inDays(10),              importance: 6, tag: 'work' },
-    { title: 'Send expenses',           due: inDays(-1),              importance: 5, tag: 'work' },
-  ];
-}
-
 /* ---------- 2. Cloud data: tasks ---------- */
 // Row-level security in the database means you only ever see your own rows.
 
@@ -684,14 +670,6 @@ async function completeTask(id, fields) {
   const el = [...field.querySelectorAll('.bubble')].find(b => b.dataset.id === id);
   if (el) { el.classList.add('pop'); await delay(330); }
   await updateTask(id, { ...fields, done_at: new Date().toISOString() });
-}
-
-async function resetToSample() {
-  let r = await sb.from('tasks').delete().not('id', 'is', null);
-  if (r.error) { appError('Reset failed: ' + r.error.message); return; }
-  r = await sb.from('tasks').insert(sampleTasks());
-  if (r.error) { appError('Reset failed: ' + r.error.message); return; }
-  await loadTasks();
 }
 
 /* ---------- 2b. Cloud data: habits ---------- */
@@ -1929,10 +1907,6 @@ $('sizeSel').addEventListener('change', () => {
   try { localStorage.setItem('bubbles.size', String(sizeScale)); } catch (_) {}
   render(); renderHabits();
 });
-
-$('resetData').onclick = () => {
-  if (confirm('Delete ALL your tasks (including completed ones) and replace them with the sample data?')) resetToSample();
-};
 
 /* ---------- 9. Habit settings screen ---------- */
 const hmMsg = $('hmMsg');

@@ -320,7 +320,14 @@
 
   <!-- CALENDAR STRIP: today and tomorrow from the family calendar -->
   <section class="panel" id="calendar">
-    <div class="panel-head"><h2>Calendar</h2></div>
+    <div class="panel-head">
+      <h2>Calendar <span id="calRange" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2>
+      <span style="display:flex;gap:6px">
+        <button class="btn ghost small" id="calPrev" hidden>‹</button>
+        <button class="btn ghost small" id="calNext" hidden>›</button>
+        <button class="btn ghost small" id="calMode">Week</button>
+      </span>
+    </div>
     <div id="calBody"></div>
     <div class="msg" id="calMsg"></div>
   </section>
@@ -691,7 +698,7 @@ function calendarUrl() {
   const h = habits.find(x => x.source_url && x.source_url.startsWith('https://'));
   if (!h) return null;
   const u = h.source_url.replace(/([?&])what=[^&]*/, '$1what=calendar');
-  return (u.includes('what=calendar') ? u : u + '&what=calendar') + '&days=14';
+  return (u.includes('what=calendar') ? u : u + '&what=calendar') + '&days=28';
 }
 
 async function loadCalendar() {
@@ -715,44 +722,71 @@ function calShort(iso) {
   return d.getDate() + ' ' + d.toLocaleString('en-GB', { month: 'short' });
 }
 
+let calMode = 'day';    // 'day' = today + tomorrow, 'week' = 7 days at a time
+let calWeek = 0;        // which week in week view: 0 = starting today, 1 = the next 7 days, ...
+
+// One day's heading and events, added to the calendar box
+function calDaySection(label, iso) {
+  const day = document.createElement('div'); day.className = 'calDay';
+  const h3 = document.createElement('h3'); h3.textContent = label; day.appendChild(h3);
+  // an event is on this day if it starts on or before it and ends on or after it
+  const evs = calEvents.filter(e => e.start <= iso && (e.end || e.start) >= iso);
+  const allDay = evs.filter(e => e.all_day), timed = evs.filter(e => !e.all_day);
+  if (!evs.length) {
+    const n = document.createElement('div'); n.className = 'calNone'; n.textContent = 'Nothing planned'; day.appendChild(n);
+  }
+  if (allDay.length) {
+    const chips = document.createElement('div'); chips.className = 'calChips';
+    allDay.forEach(e => {
+      const c = document.createElement('span'); c.className = 'calChip';
+      c.textContent = e.title + (e.end && e.end > iso ? ' → ' + calShort(e.end) : '');
+      chips.appendChild(c);
+    });
+    day.appendChild(chips);
+  }
+  timed.forEach(e => {
+    const row = document.createElement('div'); row.className = 'calEv';
+    const tm = document.createElement('span'); tm.className = 't';
+    // show the start time; add the end only if it is on the same day and differs
+    tm.textContent = (e.start < iso ? 'cont.' : e.time) +
+      (e.end_time && e.end_time !== e.time && e.end === e.start ? '–' + e.end_time : '');
+    const ti = document.createElement('span'); ti.textContent = e.title;
+    row.append(tm, ti);
+    if (e.place) { const p = document.createElement('span'); p.className = 'p'; p.textContent = '@ ' + e.place; row.appendChild(p); }
+    day.appendChild(row);
+  });
+  return day;
+}
+
 function renderCalendar(msg) {
   const body = $('calBody');
   body.textContent = '';                       // titles go in with textContent only, never innerHTML
   $('calMsg').textContent = msg || '';
-  if (!calEvents) return;
-  const t = today(), tom = new Date(t); tom.setDate(tom.getDate() + 1);
-  [['Today', toISO(t)], ['Tomorrow', toISO(tom)]].forEach(([label, iso]) => {
-    const day = document.createElement('div'); day.className = 'calDay';
-    const h3 = document.createElement('h3'); h3.textContent = label; day.appendChild(h3);
-    // an event is on this day if it starts on or before it and ends on or after it
-    const evs = calEvents.filter(e => e.start <= iso && (e.end || e.start) >= iso);
-    const allDay = evs.filter(e => e.all_day), timed = evs.filter(e => !e.all_day);
-    if (!evs.length) {
-      const n = document.createElement('div'); n.className = 'calNone'; n.textContent = 'Nothing planned'; day.appendChild(n);
-    }
-    if (allDay.length) {
-      const chips = document.createElement('div'); chips.className = 'calChips';
-      allDay.forEach(e => {
-        const c = document.createElement('span'); c.className = 'calChip';
-        c.textContent = e.title + (e.end && e.end > iso ? ' → ' + calShort(e.end) : '');
-        chips.appendChild(c);
-      });
-      day.appendChild(chips);
-    }
-    timed.forEach(e => {
-      const row = document.createElement('div'); row.className = 'calEv';
-      const tm = document.createElement('span'); tm.className = 't';
-      // show the start time; add the end only if it is on the same day and differs
-      tm.textContent = (e.start < iso ? 'cont.' : e.time) +
-        (e.end_time && e.end_time !== e.time && e.end === e.start ? '–' + e.end_time : '');
-      const ti = document.createElement('span'); ti.textContent = e.title;
-      row.append(tm, ti);
-      if (e.place) { const p = document.createElement('span'); p.className = 'p'; p.textContent = '@ ' + e.place; row.appendChild(p); }
-      day.appendChild(row);
-    });
-    body.appendChild(day);
-  });
+  const week = calMode === 'week';
+  $('calMode').textContent = week ? 'Today' : 'Week';
+  $('calPrev').hidden = $('calNext').hidden = !week;
+  $('calPrev').disabled = calWeek <= 0;
+  $('calNext').disabled = calWeek >= 3;        // the feed is fetched 28 days ahead = 4 weeks
+  if (!calEvents) { $('calRange').textContent = ''; return; }
+  const t = today();
+  const dayN = n => { const d = new Date(t); d.setDate(d.getDate() + n); return d; };
+  const nice = d => d.toLocaleString('en-GB', { weekday: 'short' }) + ' ' + calShort(toISO(d));
+  if (!week) {
+    $('calRange').textContent = '';
+    body.appendChild(calDaySection('Today', toISO(t)));
+    body.appendChild(calDaySection('Tomorrow', toISO(dayN(1))));
+    return;
+  }
+  const first = calWeek * 7;
+  $('calRange').textContent = calShort(toISO(dayN(first))) + ' – ' + calShort(toISO(dayN(first + 6)));
+  for (let i = first; i < first + 7; i++) {
+    body.appendChild(calDaySection(i === 0 ? 'Today · ' + nice(dayN(i)) : nice(dayN(i)), toISO(dayN(i))));
+  }
 }
+
+$('calMode').addEventListener('click', () => { calMode = calMode === 'week' ? 'day' : 'week'; calWeek = 0; renderCalendar(''); });
+$('calPrev').addEventListener('click', () => { if (calWeek > 0) { calWeek--; renderCalendar(''); } });
+$('calNext').addEventListener('click', () => { if (calWeek < 3) { calWeek++; renderCalendar(''); } });
 
 // Calendar needs the habits loaded first (it borrows their Sync URL), so it runs after them
 function loadAll() { return Promise.all([loadTasks(), loadHabits().then(loadCalendar)]); }

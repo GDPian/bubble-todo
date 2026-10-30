@@ -47,6 +47,14 @@
   /* ---------- Page layout ---------- */
   .app { max-width: 1200px; margin: 0 auto; display: grid; gap: 12px; grid-template-columns: 1fr; }
   header { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  /* Developer switch: a small on/off slider in the header */
+  .sw { display: inline-flex; align-items: center; gap: 6px; font-size: .75rem; color: var(--muted); cursor: pointer; user-select: none; }
+  .sw input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .sw i { position: relative; width: 32px; height: 18px; border-radius: 999px; background: rgba(255,255,255,.18); transition: background .2s; }
+  .sw i::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .2s; }
+  .sw input:checked + i { background: var(--cal); }
+  .sw input:checked + i::after { transform: translateX(14px); }
+  .sw input:focus-visible + i { outline: 2px solid var(--text); outline-offset: 2px; }
   .head-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   #btnRefresh { font-size: 1.1rem !important; line-height: 1; padding: 4px 10px !important; }
   #who { font-size: .75rem; color: var(--muted); max-width: 30vw; overflow: hidden;
@@ -379,6 +387,9 @@
     <h1>🫧 Bubbles</h1>
     <div class="head-right">
       <span id="who"></span>
+      <label class="sw" title="Developer view: hides your Career (job search) habits, so you can share your screen with colleagues">
+        <span>Developer</span><input type="checkbox" id="devToggle" role="switch"><i></i>
+      </label>
       <button class="btn ghost small" id="btnRefresh" title="Reload the app (gets the newest version and data)" aria-label="Refresh">↻</button>
       <button class="btn ghost small" id="btnSignOut">Sign out</button>
       <button class="btn" id="toggleForm">+ Add task</button>
@@ -693,7 +704,11 @@ const sb = configured ? supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null
 const field = document.getElementById('field');
 const $ = id => document.getElementById(id);
 let tasks = [];            // every task row, active AND completed
-let habits = [];           // rows from the "habits" table
+let habitsAll = [];        // every row from the "habits" table
+let habits = [];           // the habits shown: all of them, or without Career ones in Developer view
+let devMode = false;       // Developer view: hides Career (job search) habits so the screen can be shared
+try { devMode = localStorage.getItem('bubbles.dev') === '1'; } catch (_) {}
+function applyDevMode() { habits = devMode ? habitsAll.filter(h => h.category !== 'career') : habitsAll.slice(); }
 let logs = [];             // rows from "habit_log" (last 90 days) plus synced ticks
 let restDays = new Set();  // rest days for weekly habits, as "habitId|YYYY-MM-DD" (table "habit_rest"; they are NOT ticks)
 let restMissing = false;   // true until sql/009_rest_days.sql has been run
@@ -806,7 +821,7 @@ async function loadHabits() {
     r = await sb.from('habits').select('*').order('sort_order');
     if (r.error) { habitError('Could not load habits: ' + r.error.message); return; }
   }
-  habits = r.data;
+  habitsAll = r.data; applyDevMode();
 
   const since = new Date(today()); since.setDate(since.getDate() - 90);
   const l = await sb.from('habit_log').select('id,habit_id,done_on,note,count').gte('done_on', toISO(since));
@@ -1902,6 +1917,14 @@ $('btnSignOut').addEventListener('click', () => sb.auth.signOut());
 
 // Refresh button: a full reload of the page. On an iPhone home-screen app there is no browser
 // refresh button, and a full reload also picks up any new version of the app itself.
+$('devToggle').checked = devMode;
+$('devToggle').addEventListener('change', () => {
+  devMode = $('devToggle').checked;
+  try { localStorage.setItem('bubbles.dev', devMode ? '1' : '0'); } catch (_) {}
+  applyDevMode(); renderHabits();
+  if (!$('habitOverlay').hidden) renderHabitSettings();
+  $('histOverlay').hidden = true; closeHabitCard();                    // a Career habit's card must not stay open
+});
 $('btnRefresh').addEventListener('click', () => { $('btnRefresh').disabled = true; location.reload(); });
 
 function onSession(session) {
@@ -1914,7 +1937,7 @@ function onSession(session) {
     loadAll();
   } else {
     currentUser = null;
-    tasks = []; habits = []; logs = []; myEvents = [];
+    tasks = []; habitsAll = []; habits = []; logs = []; myEvents = [];
     closeDetail(); closeHabitCard(); $('habitOverlay').hidden = true; $('histOverlay').hidden = true; fullLogs = [];
     document.body.classList.add('signedout');
   }

@@ -17,7 +17,7 @@
  * Other links (open them in a browser):
  *       ?what=exercises&token=…                  every exercise and which of Push / Pull / Legs it counts as
  *       ?what=steps_set&date=2026-10-28&steps=8123&token=…     what the iPhone Shortcut calls to save steps
- *       ?what=calendar&token=…                   the next 30 days of the family calendar (add &days=14 for fewer, &back=6 to include the last 6 days)
+ *       ?what=calendar&token=…                   the next 30 days of the family calendar (add &days=14 for fewer or up to &days=400 for more, &back=6 to include the last 6 days)
  *
  * CALENDAR SETUP (once): Project Settings > Script properties > Add property:
  *       name  FAMILY_CAL_URL    value  the calendar link from Family Daily (the https://app.familydaily.app/api/calendar/... one)
@@ -314,7 +314,7 @@ function bubblesCalendar_(p) {
   let url = PropertiesService.getScriptProperties().getProperty('FAMILY_CAL_URL');
   if (!url) return { error: 'Script property FAMILY_CAL_URL is not set (see the setup notes at the top of the script)' };
   url = url.trim().replace(/^webcal:/i, 'https:');
-  const days = Math.max(1, Math.min(90, Math.round(Number(p.days)) || BUBBLES_CAL_DAYS));
+  const days = Math.max(1, Math.min(400, Math.round(Number(p.days)) || BUBBLES_CAL_DAYS));
   const todayIso = Utilities.formatDate(new Date(), BUBBLES_CAL_TZ, 'yyyy-MM-dd');
   const back = Math.max(0, Math.min(7, Math.round(Number(p.back)) || 0));   // also return this many days BEFORE today (for a Monday-start week)
   const key = 'cal_' + todayIso + '_' + days + '_' + back;     // includes the date so "today" is never stale after midnight

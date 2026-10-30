@@ -106,16 +106,15 @@
   .calDay.calEmpty { display: flex; gap: 8px; align-items: baseline; }   /* an empty day is one line, not two */
   .calDay.calEmpty h3 { margin: 0; min-width: 6.6em; }
   @media (min-width: 700px) { #calBody.wk .calDay.calEmpty { display: block; } #calBody.wk .calDay.calEmpty h3 { margin: 0 0 4px; min-width: 0; } }
-  /* Month view: a Monday-Sunday grid of days. Tap a day to see it in full underneath. */
+  /* 5-week view: a Monday-Sunday grid starting with this week. Tap a day to see it in full underneath. */
   .calMonth { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
   .calMonth .mHead { font-size: .68rem; text-align: center; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
   .calMonth .mCell { font: inherit; color: var(--text); text-align: left; background: rgba(255,255,255,.03);
                      border: 1px solid transparent; border-radius: 6px; padding: 3px; min-height: 52px; min-width: 0;
                      display: flex; flex-direction: column; gap: 2px; cursor: pointer; overflow: hidden; }
   .calMonth .mCell .n { font-size: .72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .calMonth .mCell.out { opacity: .35; }
+  .calMonth .mCell.alt { background: rgba(255,255,255,.07); }   /* every other month a little lighter, so month borders show */
   .calMonth .mCell.past { opacity: .5; }
-  .calMonth .mCell.out.past { opacity: .25; }
   .calMonth .mCell.isToday { border-color: var(--cal); }
   .calMonth .mCell.isToday .n { color: var(--cal); font-weight: 700; }
   .calMonth .mCell.sel { background: rgba(255,255,255,.12); border-color: var(--text); }
@@ -389,7 +388,7 @@
         <select id="calView" class="small-select" aria-label="Calendar view">
           <option value="day">Today</option>
           <option value="week">Week</option>
-          <option value="month">Month</option>
+          <option value="weeks">5 weeks</option>
         </select>
       </span>
     </div>
@@ -808,7 +807,7 @@ function calendarUrl() {
   const h = habits.find(x => x.source_url && x.source_url.startsWith('https://'));
   if (!h) return null;
   const u = h.source_url.replace(/([?&])what=[^&]*/, '$1what=calendar');
-  return (u.includes('what=calendar') ? u : u + '&what=calendar') + '&days=90&back=7';   // 90 days ahead covers 3 months; back=7 is the most the script allows
+  return (u.includes('what=calendar') ? u : u + '&what=calendar') + '&days=400&back=7';   // about a year ahead (the script allows up to 400); back=7 is the most it allows
 }
 
 async function loadCalendar() {
@@ -832,10 +831,10 @@ function calShort(iso) {
   return d.getDate() + ' ' + d.toLocaleString('en-GB', { month: 'short' });
 }
 
-let calMode = 'week';   // 'week' = Monday to Sunday (default), 'day' = today + tomorrow only, 'month' = month grid
+let calMode = 'week';   // 'week' = Monday to Sunday (default), 'day' = today + tomorrow only, 'weeks' = 5 weeks from this week
 let calWeek = 0;        // which week in week view: 0 = this week, 1 = next week, ...
-let calMonth = 0;       // which month in month view: 0 = this month, 1 = next month, ...
-let calSel = null;      // the day tapped in month view (YYYY-MM-DD)
+let calBlock = 0;       // which 5-week block: 0 = this week + 4 more, 1 = the 5 weeks after that, ...
+let calSel = null;      // the day tapped in 5-week view (YYYY-MM-DD)
 
 // Everything that happens on one day: family-calendar events, my own events, and my tasks due.
 // Used by the day/week sections and by the month grid, so they always agree.
@@ -902,15 +901,15 @@ function renderCalendar(msg) {
   body.textContent = '';                       // titles go in with textContent only, never innerHTML
   body.classList.remove('wk');
   $('calMsg').textContent = msg || (evMissing ? 'Events table missing – run sql/007_someday_and_events.sql in Supabase' : '');
-  const week = calMode === 'week', month = calMode === 'month';
+  const week = calMode === 'week', five = calMode === 'weeks';
   $('calView').value = calMode;
   $('calPrev').hidden = $('calNext').hidden = calMode === 'day';
-  $('calPrev').disabled = month ? calMonth <= 0 : calWeek <= 0;
-  $('calNext').disabled = month ? calMonth >= 2 : calWeek >= 3;   // the feed is fetched 90 days ahead = about 3 months
+  $('calPrev').disabled = five ? calBlock <= 0 : calWeek <= 0;
+  $('calNext').disabled = five ? calBlock >= 10 : calWeek >= 51;   // the feed is fetched 400 days ahead = about a year
   const t = today();
   const dayN = n => { const d = new Date(t); d.setDate(d.getDate() + n); return d; };
   const nice = d => d.toLocaleString('en-GB', { weekday: 'short' }) + ' ' + calShort(toISO(d));
-  if (month) { renderCalMonth(body, t, nice); return; }
+  if (five) { renderCalFive(body, t, nice); return; }
   if (!week) {
     $('calRange').textContent = '';
     body.appendChild(calDaySection('Today', toISO(t)));
@@ -930,31 +929,34 @@ function renderCalendar(msg) {
   }
 }
 
-// Month view: a Monday-Sunday grid. Each day shows up to 3 small items; tap a day to read it in full below the grid.
-function renderCalMonth(body, t, nice) {
-  const first = new Date(t.getFullYear(), t.getMonth() + calMonth, 1);          // 1st of the month being shown
-  const daysIn = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
-  const lead = (first.getDay() + 6) % 7;                                        // blank days before the 1st (Monday start)
-  const weeks = Math.ceil((lead + daysIn) / 7);
+// 5-week view: Monday-Sunday grid, 5 rows, the first row being this week (so no past months).
+// Each day shows up to 3 small items; tap a day to read it in full below the grid.
+function renderCalFive(body, t, nice) {
+  const start = new Date(t.getFullYear(), t.getMonth(), t.getDate() - ((t.getDay() + 6) % 7) + calBlock * 35);   // Monday of the first week
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 34);
   const todayIso = toISO(t);
-  $('calRange').textContent = first.toLocaleString('en-GB', { month: 'long', year: 'numeric' });
-  // keep the selected day inside the month shown (default: today if it is in this month, else the 1st)
-  const monthKey = toISO(first).slice(0, 7);
-  if (!calSel || calSel.slice(0, 7) !== monthKey) calSel = todayIso.slice(0, 7) === monthKey ? todayIso : toISO(first);
+  const yr = d => ' ' + d.getFullYear();
+  $('calRange').textContent = calShort(toISO(start)) + (start.getFullYear() !== end.getFullYear() ? yr(start) : '') + ' – ' + calShort(toISO(end)) + yr(end);
+  // keep the selected day inside the 5 weeks shown (default: today if it is in them, else the first day)
+  const startIso = toISO(start), endIso = toISO(end);
+  if (!calSel || calSel < startIso || calSel > endIso) calSel = (todayIso >= startIso && todayIso <= endIso) ? todayIso : startIso;
 
   const grid = document.createElement('div'); grid.className = 'calMonth';
   ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach(n => {
     const h = document.createElement('div'); h.className = 'mHead'; h.textContent = n; grid.appendChild(h);
   });
-  for (let i = 0; i < weeks * 7; i++) {
-    const d = new Date(first.getFullYear(), first.getMonth(), 1 - lead + i);
+  for (let i = 0; i < 35; i++) {
+    const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
     const iso = toISO(d);
     const cell = document.createElement('button'); cell.type = 'button'; cell.className = 'mCell';
-    if (iso.slice(0, 7) !== monthKey) cell.classList.add('out');                // the grey days from the next/previous month
+    if (d.getMonth() % 2) cell.classList.add('alt');                            // odd months a little lighter
     if (iso < todayIso) cell.classList.add('past');
     if (iso === todayIso) cell.classList.add('isToday');
     if (iso === calSel) cell.classList.add('sel');
-    const n = document.createElement('span'); n.className = 'n'; n.textContent = d.getDate(); cell.appendChild(n);
+    // day number; the 1st of a month (and the first cell) also says which month
+    const n = document.createElement('span'); n.className = 'n';
+    n.textContent = (i === 0 || d.getDate() === 1) ? d.getDate() + ' ' + d.toLocaleString('en-GB', { month: 'short' }) : d.getDate();
+    cell.appendChild(n);
     // tasks first, then all-day items, then timed events (same order as the day view)
     const { evs, due } = calDayItems(iso);
     const items = due.map(x => ({ text: x.title, cls: x.tag }))
@@ -1045,8 +1047,8 @@ function openEvent(id, occIso) {
 }
 function closeEvent() { evId = null; evOcc = null; $('evOverlay').hidden = true; }
 
-// In month view, "+ Event" starts on the day you have tapped
-$('calAdd').onclick = () => { openEvent(null); if (calMode === 'month' && calSel) $('evDate').value = calSel; };
+// In 5-week view, "+ Event" starts on the day you have tapped
+$('calAdd').onclick = () => { openEvent(null); if (calMode === 'weeks' && calSel) $('evDate').value = calSel; };
 $('evClose').onclick = closeEvent;
 $('evScope').onchange = syncEventForm;
 $('evOverlay').addEventListener('click', e => { if (e.target === $('evOverlay')) closeEvent(); });
@@ -1125,15 +1127,15 @@ $('evDelete').onclick = async () => {
   renderCalendar($('calMsg').textContent);
 };
 
-// The dropdown: Today / Week / Month. Switching always starts from the current week or month.
-$('calView').addEventListener('change', () => { calMode = $('calView').value; calWeek = 0; calMonth = 0; calSel = null; renderCalendar(''); });
+// The dropdown: Today / Week / 5 weeks. Switching always starts from the current week.
+$('calView').addEventListener('change', () => { calMode = $('calView').value; calWeek = 0; calBlock = 0; calSel = null; renderCalendar(''); });
 $('calPrev').addEventListener('click', () => {
-  if (calMode === 'month') { if (calMonth > 0) { calMonth--; calSel = null; renderCalendar(''); } }
+  if (calMode === 'weeks') { if (calBlock > 0) { calBlock--; calSel = null; renderCalendar(''); } }
   else if (calWeek > 0) { calWeek--; renderCalendar(''); }
 });
 $('calNext').addEventListener('click', () => {
-  if (calMode === 'month') { if (calMonth < 2) { calMonth++; calSel = null; renderCalendar(''); } }
-  else if (calWeek < 3) { calWeek++; renderCalendar(''); }
+  if (calMode === 'weeks') { if (calBlock < 10) { calBlock++; calSel = null; renderCalendar(''); } }
+  else if (calWeek < 51) { calWeek++; renderCalendar(''); }
 });
 
 // Calendar needs the habits loaded first (it borrows their Sync URL), so it runs after them

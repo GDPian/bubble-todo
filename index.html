@@ -387,7 +387,7 @@
     <h1>🫧 Bubbles</h1>
     <div class="head-right">
       <span id="who"></span>
-      <label class="sw" title="Developer view: hides your Career (job search) habits, so you can share your screen with colleagues">
+      <label class="sw" title="Developer view: shows a made-up set of habits (nothing is saved), so you can share your screen with colleagues">
         <span>Developer</span><input type="checkbox" id="devToggle" role="switch"><i></i>
       </label>
       <button class="btn ghost small" id="btnRefresh" title="Reload the app (gets the newest version and data)" aria-label="Refresh">↻</button>
@@ -698,16 +698,99 @@ const SUPABASE_URL = 'https://fcfeulmuvzkrxtkekcsx.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_uZwMtwWb1T0pUu3oZhk_dQ_rCvC1Pp2';
 
 const configured = SUPABASE_URL.startsWith('https://') && !SUPABASE_KEY.startsWith('PASTE');
-const sb = configured ? supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+const sbReal = configured ? supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+
+/* ---------- Developer view: a made-up set of habits that lives only in this page ----------
+   While Developer is on, the three habit tables ("habits", "habit_log", "habit_rest") are answered from
+   memory instead of Supabase, so colleagues see a different set of habits and nothing they tick is saved.
+   Everything else (login, tasks, events) still goes to Supabase as normal. */
+const DEMO_TABLES = ['habits', 'habit_log', 'habit_rest'];
+const sb = !sbReal ? null : new Proxy(sbReal, {
+  get(target, key) {
+    if (key === 'from') return name => (devMode && DEMO_TABLES.includes(name)) ? demoTable(name) : target.from(name);
+    const v = Reflect.get(target, key);
+    return typeof v === 'function' ? v.bind(target) : v;
+  }
+});
+const DEMO_HABITS = [
+  { name: 'Drink water',     category: 'health', kind: 'daily',  target_per_week: 7, daily_target: 4 },
+  { name: 'Eat breakfast',   category: 'health', kind: 'daily',  target_per_week: 7 },
+  { name: 'Read 10 pages',   category: 'fun',    kind: 'daily',  target_per_week: 7 },
+  { name: 'Meditate 5 min',  category: 'health', kind: 'daily',  target_per_week: 7 },
+  { name: 'Plan tomorrow',   category: 'career', kind: 'daily',  target_per_week: 7 },
+  { name: 'Call a friend',   category: 'fun',    kind: 'weekly', target_per_week: 2 },
+];
+let demoStore = null, demoSeq = 0;
+function demoData() {
+  if (demoStore) return demoStore;
+  const habitRows = DEMO_HABITS.map((h, i) => ({ id: 'demo-h' + (i + 1), sort_order: i + 1, grace_days: 2, daily_target: 1, ask_note: false,
+    source_url: null, created_at: new Date().toISOString(), ...h }));
+  // a few past days already ticked, so streaks and growth look alive
+  const logRows = [];
+  const skip = { 'Read 10 pages': [2, 5], 'Meditate 5 min': [1, 3, 4], 'Plan tomorrow': [1, 2, 3, 4, 5] };
+  habitRows.filter(h => h.kind === 'daily').forEach(h => {
+    for (let back = 1; back <= 6; back++) {
+      if ((skip[h.name] || []).includes(back)) continue;
+      const d = new Date(today()); d.setDate(d.getDate() - back);
+      logRows.push({ id: 'demo-l' + (++demoSeq), habit_id: h.id, done_on: toISO(d), note: '', count: h.daily_target || 1 });
+    }
+  });
+  demoStore = { habits: habitRows, habit_log: logRows, habit_rest: [] };
+  return demoStore;
+}
+// A tiny stand-in for the Supabase query builder: just the calls this app makes on the habit tables
+function demoTable(name) {
+  const rows = demoData()[name];
+  let op = 'select', patch = null, wantRows = false, one = false, range = null;
+  const filters = [], orders = [];
+  const b = {
+    select() { wantRows = true; return b; },
+    insert(r) { op = 'insert'; patch = r; return b; },
+    update(p) { op = 'update'; patch = p; return b; },
+    upsert(r) { op = 'upsert'; patch = r; return b; },
+    delete() { op = 'delete'; return b; },
+    eq(c, v) { filters.push(r => String(r[c]) === String(v)); return b; },
+    gte(c, v) { filters.push(r => r[c] >= v); return b; },
+    order(c, o) { orders.push([c, !(o && o.ascending === false)]); return b; },
+    range(a, z) { range = [a, z]; return b; },
+    single() { one = true; return b; },
+    then(res, rej) { return Promise.resolve(run()).then(res, rej); },
+  };
+  function run() {
+    let data = [];
+    if (op === 'insert' || op === 'upsert') {
+      [].concat(patch).forEach(r => {
+        const have = op === 'upsert' ? rows.find(x => x.name === r.name) : null;
+        if (have) return;
+        const row = name === 'habits' ? { id: 'demo-h' + (++demoSeq), sort_order: rows.length + 1, grace_days: 2, daily_target: 1, ask_note: false, source_url: null, created_at: new Date().toISOString(), ...r }
+                  : name === 'habit_log' ? { id: 'demo-l' + (++demoSeq), note: '', count: 1, ...r }
+                  : { id: 'demo-r' + (++demoSeq), ...r };
+        rows.push(row); data.push(row);
+      });
+    } else if (op === 'update') {
+      data = rows.filter(r => filters.every(f => f(r))); data.forEach(r => Object.assign(r, patch));
+    } else if (op === 'delete') {
+      for (let i = rows.length - 1; i >= 0; i--) if (filters.every(f => f(rows[i]))) rows.splice(i, 1);
+    } else {
+      data = rows.filter(r => filters.every(f => f(r)));
+      orders.slice().reverse().forEach(([c, asc]) => data.sort((x, y) => (x[c] > y[c] ? 1 : x[c] < y[c] ? -1 : 0) * (asc ? 1 : -1)));
+      if (range) data = data.slice(range[0], range[1] + 1);
+    }
+    data = data.map(r => ({ ...r }));
+    return { data: one ? (data[0] || null) : data, error: null };
+  }
+  return b;
+}
 
 const field = document.getElementById('field');
 const $ = id => document.getElementById(id);
 let tasks = [];            // every task row, active AND completed
 let habitsAll = [];        // every row from the "habits" table
-let habits = [];           // the habits shown: all of them, or without Career ones in Developer view
-let devMode = false;       // Developer view: hides Career (job search) habits so the screen can be shared
+let habits = [];           // the habits shown (in Developer view: the made-up demo set)
+let devMode = false;       // Developer view: shows made-up demo habits so the screen can be shared
+let calSrcUrl = null;      // a real habit's Sync URL; the calendar link is built from it (kept even in Developer view)
 try { devMode = localStorage.getItem('bubbles.dev') === '1'; } catch (_) {}
-function applyDevMode() { habits = devMode ? habitsAll.filter(h => h.category !== 'career') : habitsAll.slice(); }
+function applyDevMode() { habits = habitsAll.slice(); }
 let logs = [];             // rows from "habit_log" (last 90 days) plus synced ticks
 let restDays = new Set();  // rest days for weekly habits, as "habitId|YYYY-MM-DD" (table "habit_rest"; they are NOT ticks)
 let restMissing = false;   // true until sql/009_rest_days.sql has been run
@@ -821,6 +904,9 @@ async function loadHabits() {
     if (r.error) { habitError('Could not load habits: ' + r.error.message); return; }
   }
   habitsAll = r.data; applyDevMode();
+  // the calendar link is built from a real habit's Sync URL; in Developer view the shown habits are made up, so ask for the real ones
+  const realRows = devMode ? ((await sbReal.from('habits').select('source_url')).data || []) : r.data;
+  calSrcUrl = (realRows.map(x => x.source_url).find(u => u && u.startsWith('https://'))) || null;
 
   const since = new Date(today()); since.setDate(since.getDate() - 90);
   const l = await sb.from('habit_log').select('id,habit_id,done_on,note,count').gte('done_on', toISO(since));
@@ -874,9 +960,8 @@ let myEvents = [];      // events typed in with + Event (stored in Supabase)
 
 // The calendar link is the same web app as the habit Sync URLs, just with what=calendar
 function calendarUrl() {
-  const h = habits.find(x => x.source_url && x.source_url.startsWith('https://'));
-  if (!h) return null;
-  const u = h.source_url.replace(/([?&])what=[^&]*/, '$1what=calendar');
+  if (!calSrcUrl) return null;
+  const u = calSrcUrl.replace(/([?&])what=[^&]*/, '$1what=calendar');
   return (u.includes('what=calendar') ? u : u + '&what=calendar') + '&days=400&back=7';   // about a year ahead (the script allows up to 400); back=7 is the most it allows
 }
 
@@ -1914,9 +1999,9 @@ $('devToggle').checked = devMode;
 $('devToggle').addEventListener('change', () => {
   devMode = $('devToggle').checked;
   try { localStorage.setItem('bubbles.dev', devMode ? '1' : '0'); } catch (_) {}
-  applyDevMode(); renderHabits();
-  if (!$('habitOverlay').hidden) renderHabitSettings();
-  $('histOverlay').hidden = true; closeHabitCard();                    // a Career habit's card must not stay open
+  $('histOverlay').hidden = true; closeHabitCard(); $('habitOverlay').hidden = true;   // any open habit card is for the other set
+  fullLogs = [];
+  loadHabits();                                                         // reloads from Supabase, or from the demo set
 });
 $('btnRefresh').addEventListener('click', () => { $('btnRefresh').disabled = true; location.reload(); });
 

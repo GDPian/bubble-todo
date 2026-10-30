@@ -192,6 +192,18 @@
   .fgrid { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
   .fgrid label { display: flex; flex-direction: column; justify-content: flex-end; gap: 4px;   /* flex-end: boxes line up along the bottom even when one label wraps to two lines */ font-size: .75rem; color: var(--muted); }
   .fgrid .wide { grid-column: 1 / -1; }
+  /* Time wheel (phones): two scroll columns, hours and minutes, that snap to a value */
+  #timeOverlay { z-index: 60; }
+  .wheels { position: relative; display: flex; justify-content: center; align-items: center; gap: 6px; height: 200px; margin: 8px 0 14px; }
+  .wheel { height: 200px; width: 90px; overflow-y: auto; box-sizing: border-box; padding: 80px 0; scroll-snap-type: y mandatory;
+           scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+           -webkit-mask-image: linear-gradient(transparent, #000 30%, #000 70%, transparent); mask-image: linear-gradient(transparent, #000 30%, #000 70%, transparent); }
+  .wheel::-webkit-scrollbar { display: none; }
+  .wheel div { height: 40px; line-height: 40px; text-align: center; font-size: 1.5rem; scroll-snap-align: center;
+               font-variant-numeric: tabular-nums; color: var(--text); cursor: pointer; }
+  .wheelBand { position: absolute; left: 14%; right: 14%; top: 80px; height: 40px; border-radius: 10px; background: rgba(255,255,255,.12); pointer-events: none; }
+  .wheelColon { font-size: 1.5rem; padding-bottom: 4px; }
+  input[data-time] { cursor: pointer; }
   .fgrid [hidden] { display: none; }   /* the label rule above would otherwise keep hidden boxes visible */
   #addForm { display: none; margin-bottom: 10px; }
   #addForm.open { display: grid; }
@@ -583,6 +595,24 @@
       </div>
       <div class="wide msg err" id="evMsg"></div>
     </form>
+  </div>
+</div>
+
+<!-- ============ Time wheel (phones only: replaces the browser's own time box) ============ -->
+<div class="overlay" id="timeOverlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="Pick a time">
+    <div class="sheet-head"><h2 id="timeHead">Pick a time</h2></div>
+    <div class="wheels">
+      <div class="wheelBand"></div>
+      <div class="wheel" id="wHour" aria-label="Hour"></div>
+      <div class="wheelColon">:</div>
+      <div class="wheel" id="wMin" aria-label="Minute"></div>
+    </div>
+    <div class="form-actions">
+      <button class="btn" type="button" id="timeSet">Set</button>
+      <button class="btn ghost" type="button" id="timeClear">Clear</button>
+      <button class="btn ghost" type="button" id="timeCancel">Cancel</button>
+    </div>
   </div>
 </div>
 
@@ -2329,6 +2359,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && cu
 // Escape closes whichever card is open
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
+  if (!$('timeOverlay').hidden) { closeTimePicker(); return; }          // the time wheel closes first, leaving the card under it open
   closeDetail(); closeHabitCard(); closeEvent(); $('habitOverlay').hidden = true; $('histOverlay').hidden = true;
 });
 
@@ -2351,12 +2382,54 @@ document.addEventListener('keydown', e => {
   const i = boxes.indexOf(e.target);
   if (i < 0) return;
   const step = e.shiftKey ? -1 : 1;
-  const dateLike = e.target.matches('input[type="date"], input[type="time"]');
+  const dateLike = e.target.matches('input[type="date"], input[type="time"], input[data-time]');
   const atEdge = (step === 1 && i === boxes.length - 1) || (step === -1 && i === 0);
   if (!dateLike && !atEdge) return;                       // everything else: the browser's own Tab is fine
   e.preventDefault();
   boxes[(i + step + boxes.length) % boxes.length].focus();
 });
+
+/* ---------- Time wheel (phones) ----------
+   On a touch screen the time boxes become tap-to-open boxes that show two scroll wheels (hours, minutes).
+   On a PC they stay as the browser's normal time box. */
+const ROW = 40;                                           // height of one row in the wheel (px), matches the CSS
+let timeTarget = null;                                    // the time box the wheel is editing
+const pad2 = n => String(n).padStart(2, '0');
+function buildWheel(el, count) {
+  el.textContent = '';
+  for (let n = 0; n < count; n++) {
+    const row = document.createElement('div'); row.textContent = pad2(n);
+    row.addEventListener('click', () => el.scrollTo({ top: n * ROW, behavior: 'smooth' }));   // tap a number to jump to it
+    el.appendChild(row);
+  }
+}
+const wheelValue = (el, count) => Math.max(0, Math.min(count - 1, Math.round(el.scrollTop / ROW)));
+function openTimePicker(inp) {
+  timeTarget = inp;
+  const lbl = inp.closest('label');
+  $('timeHead').textContent = lbl ? lbl.firstChild.textContent.trim() || 'Pick a time' : 'Pick a time';
+  const [h, m] = /^\d\d:\d\d/.test(inp.value) ? inp.value.split(':').map(Number) : [9, 0];   // empty box starts at 09:00
+  $('timeOverlay').hidden = false;
+  $('wHour').scrollTop = h * ROW; $('wMin').scrollTop = m * ROW;                          // after it is shown, so it can scroll
+}
+function closeTimePicker() { timeTarget = null; $('timeOverlay').hidden = true; }
+function setTimeBox(value) {
+  if (!timeTarget) return;
+  timeTarget.value = value;
+  timeTarget.dispatchEvent(new Event('input', { bubbles: true })); timeTarget.dispatchEvent(new Event('change', { bubbles: true }));
+  closeTimePicker();
+}
+if (window.matchMedia && matchMedia('(pointer: coarse)').matches) {
+  buildWheel($('wHour'), 24); buildWheel($('wMin'), 60);
+  document.querySelectorAll('input[type="time"]').forEach(inp => {
+    inp.type = 'text'; inp.readOnly = true; inp.placeholder = '--:--'; inp.dataset.time = '1';   // no keyboard; tapping opens the wheel
+  });
+  document.addEventListener('click', e => { const inp = e.target.closest && e.target.closest('input[data-time]'); if (inp) openTimePicker(inp); });
+  $('timeSet').onclick = () => setTimeBox(pad2(wheelValue($('wHour'), 24)) + ':' + pad2(wheelValue($('wMin'), 60)));
+  $('timeClear').onclick = () => setTimeBox('');
+  $('timeCancel').onclick = closeTimePicker;
+  $('timeOverlay').addEventListener('click', e => { if (e.target === $('timeOverlay')) closeTimePicker(); });
+}
 
 /* ---------- 11. Home screen icon (drawn here so we need only one file) ---------- */
 (function makeIcon() {

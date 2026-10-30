@@ -542,16 +542,17 @@
       <label class="plainOnly">Ends <span class="meta">(optional)</span>
         <input id="evEnd" type="time">
       </label>
-      <label class="wide tripOnly">✈ Outbound flight <span class="meta">(shown on the first day)</span>
+      <label class="wide tripOnly"><span class="chk"><input id="evHasFlights" type="checkbox"> ✈ Flights? (tick to add flight times)</span></label>
+      <label class="wide tripOnly flightOnly">✈ Outbound flight <span class="meta">(shown on the first day)</span>
         <input id="evOutFlight" maxlength="60" placeholder="e.g. JL43 HND → LHR">
       </label>
-      <label class="tripOnly">Departs <input id="evOutDep" type="time"></label>
-      <label class="tripOnly">Lands <input id="evOutArr" type="time"></label>
-      <label class="wide tripOnly">✈ Return flight <span class="meta">(shown on the last day)</span>
+      <label class="tripOnly flightOnly">Departs <input id="evOutDep" type="time"></label>
+      <label class="tripOnly flightOnly">Lands <input id="evOutArr" type="time"></label>
+      <label class="wide tripOnly flightOnly">✈ Return flight <span class="meta">(shown on the last day)</span>
         <input id="evRetFlight" maxlength="60" placeholder="e.g. JL44 LHR → HND">
       </label>
-      <label class="tripOnly">Departs <input id="evRetDep" type="time"></label>
-      <label class="tripOnly">Lands <input id="evRetArr" type="time"></label>
+      <label class="tripOnly flightOnly">Departs <input id="evRetDep" type="time"></label>
+      <label class="tripOnly flightOnly">Lands <input id="evRetArr" type="time"></label>
       <label class="wide">Notes <span class="meta">(optional)</span>
         <textarea id="evDetails" rows="2" maxlength="300" placeholder="e.g. lands the next morning, hotel name"></textarea>
       </label>
@@ -1074,7 +1075,8 @@ function syncEventForm() {
   const one = series && $('evScope').value === 'one';
   const span = !!$('evEndDate').value;                            // a trip does not repeat
   $('evRepeat').disabled = $('evUntil').disabled = one || span;   // a single moved day does not repeat either
-  document.querySelectorAll('#evForm .tripOnly').forEach(el => el.hidden = !span);    // flight boxes only for trips
+  document.querySelectorAll('#evForm .tripOnly').forEach(el => el.hidden = !span);    // trip boxes only for trips
+  document.querySelectorAll('#evForm .flightOnly').forEach(el => el.hidden = !(span && $('evHasFlights').checked));   // flight boxes only when ticked
   document.querySelectorAll('#evForm .plainOnly').forEach(el => el.hidden = span);    // start/end time only for one-day events
 }
 
@@ -1092,6 +1094,7 @@ function openEvent(id, occIso) {
   $('evEndDate').value = e && e.end_date ? e.end_date : '';
   $('evDetails').value = e && e.details ? e.details : '';
   const t5 = v => v ? v.slice(0, 5) : '';
+  $('evHasFlights').checked = !!(e && (e.out_flight || e.out_dep || e.out_arr || e.ret_flight || e.ret_dep || e.ret_arr));   // ticked when flights were saved
   $('evOutFlight').value = e && e.out_flight ? e.out_flight : ''; $('evOutDep').value = e ? t5(e.out_dep) : ''; $('evOutArr').value = e ? t5(e.out_arr) : '';
   $('evRetFlight').value = e && e.ret_flight ? e.ret_flight : ''; $('evRetDep').value = e ? t5(e.ret_dep) : ''; $('evRetArr').value = e ? t5(e.ret_arr) : '';
   $('evRepeat').value = e ? e.repeat : 'none';
@@ -1110,6 +1113,7 @@ $('calAdd').onclick = () => { openEvent(null); if (calMode === 'weeks' && calSel
 $('evClose').onclick = closeEvent;
 $('evScope').onchange = syncEventForm;
 $('evEndDate').addEventListener('input', syncEventForm);
+$('evHasFlights').addEventListener('change', syncEventForm);
 $('evOverlay').addEventListener('click', e => { if (e.target === $('evOverlay')) closeEvent(); });
 
 // Save, then show the result
@@ -1136,8 +1140,9 @@ $('evForm').addEventListener('submit', async e => {
   if (endDate || details || (old && (old.end_date || old.details))) { row.end_date = endDate && endDate > row.on_date ? endDate : null; row.details = details || null; }
   if (row.end_date) {
     row.repeat = 'none'; row.start_time = row.end_time = null;       // a trip has flights, not a start/end time
-    Object.assign(row, { out_flight: $('evOutFlight').value.trim() || null, out_dep: $('evOutDep').value || null, out_arr: $('evOutArr').value || null,
-                         ret_flight: $('evRetFlight').value.trim() || null, ret_dep: $('evRetDep').value || null, ret_arr: $('evRetArr').value || null });
+    const fl = $('evHasFlights').checked;                              // flights unticked = no flight lines
+    Object.assign(row, { out_flight: fl ? $('evOutFlight').value.trim() || null : null, out_dep: fl ? $('evOutDep').value || null : null, out_arr: fl ? $('evOutArr').value || null : null,
+                         ret_flight: fl ? $('evRetFlight').value.trim() || null : null, ret_dep: fl ? $('evRetDep').value || null : null, ret_arr: fl ? $('evRetArr').value || null : null });
   } else if (old && old.end_date) {                                    // turned a trip back into a one-day event: clear the flights
     Object.assign(row, { out_flight: null, out_dep: null, out_arr: null, ret_flight: null, ret_dep: null, ret_arr: null });
   }

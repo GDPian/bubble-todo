@@ -190,7 +190,7 @@
   .btn.ghost { background: transparent; border: 1px solid var(--panel-border); color: var(--muted); }
   .btn.danger { background: transparent; border: 1px solid #7f1d1d; color: var(--error); }
   .fgrid { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
-  .fgrid label { display: flex; flex-direction: column; gap: 4px; font-size: .75rem; color: var(--muted); }
+  .fgrid label { display: flex; flex-direction: column; justify-content: flex-end; gap: 4px;   /* flex-end: boxes line up along the bottom even when one label wraps to two lines */ font-size: .75rem; color: var(--muted); }
   .fgrid .wide { grid-column: 1 / -1; }
   .fgrid [hidden] { display: none; }   /* the label rule above would otherwise keep hidden boxes visible */
   #addForm { display: none; margin-bottom: 10px; }
@@ -527,7 +527,7 @@
       <label>Date
         <input id="evDate" type="date" required>
       </label>
-      <label>Last day <span class="meta">(for a trip; empty = one day)</span>
+      <label>Last day <span class="meta">(trip? set this to add flights)</span>
         <input id="evEndDate" type="date">
       </label>
       <label>Whose

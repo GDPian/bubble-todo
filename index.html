@@ -192,6 +192,7 @@
   .fgrid { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
   .fgrid label { display: flex; flex-direction: column; gap: 4px; font-size: .75rem; color: var(--muted); }
   .fgrid .wide { grid-column: 1 / -1; }
+  .fgrid [hidden] { display: none; }   /* the label rule above would otherwise keep hidden boxes visible */
   #addForm { display: none; margin-bottom: 10px; }
   #addForm.open { display: grid; }
   /* font-size 16px stops iOS from zooming in when you tap a field */

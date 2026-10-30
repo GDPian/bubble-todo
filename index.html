@@ -526,6 +526,9 @@
       <label>Date
         <input id="evDate" type="date" required>
       </label>
+      <label>Last day <span class="meta">(for a trip; empty = one day)</span>
+        <input id="evEndDate" type="date">
+      </label>
       <label>Whose
         <select id="evTag">
           <option value="personal">Mine (personal)</option>
@@ -533,11 +536,14 @@
           <option value="her">Hers</option>
         </select>
       </label>
-      <label>Starts <span class="meta">(empty = all day)</span>
+      <label>Starts <span class="meta" id="evStartLbl">(empty = all day)</span>
         <input id="evStart" type="time">
       </label>
-      <label>Ends <span class="meta">(optional)</span>
+      <label>Ends <span class="meta" id="evEndLbl">(optional)</span>
         <input id="evEnd" type="time">
+      </label>
+      <label class="wide">Flights / details <span class="meta">(optional)</span>
+        <textarea id="evDetails" rows="2" maxlength="300" placeholder="e.g. JL43 HND 11:05 → LHR 15:30. Back: JL44 lands 06:40"></textarea>
       </label>
       <label>Repeats
         <select id="evRepeat">
@@ -850,9 +856,21 @@ function calDayItems(iso) {
   // an event is on this day if it starts on or before it and ends on or after it
   // family-calendar events that touch this day, plus my own typed-in events for this day
   const family = (calEvents || []).filter(e => e.start <= iso && (e.end || e.start) >= iso);
-  const mine = myEvents.filter(x => evOccursOn(x, iso)).map(x => ({
-    title: x.title, start: iso, end: iso, all_day: !x.start_time, tag: x.tag, evId: x.id, occ: iso, repeats: x.repeat !== 'none',
-    time: x.start_time ? x.start_time.slice(0, 5) : null, end_time: x.end_time ? x.end_time.slice(0, 5) : null }));
+  const mine = myEvents.filter(x => evOccursOn(x, iso)).map(x => {
+    const span = !!x.end_date && x.end_date > x.on_date;      // a trip: shown as a chip on every day it covers
+    const st = x.start_time ? x.start_time.slice(0, 5) : null, et = x.end_time ? x.end_time.slice(0, 5) : null;
+    const first = iso === x.on_date, last = iso === x.end_date;
+    const e = { title: x.title, start: iso, end: iso, all_day: span || !x.start_time, tag: x.tag, evId: x.id, occ: iso, repeats: x.repeat !== 'none',
+      time: st, end_time: et };
+    if (span) {
+      // first day: "→ 8 Nov · leaves 11:05"; last day: "· back 06:40"; days in between: "(away)"
+      e.end = x.end_date;
+      e.label = x.title + (first ? ' → ' + calShort(x.end_date) : '') + (first && st ? ' · leaves ' + st : '') +
+        (last && et ? ' · back ' + et : '') + (!first && !last ? ' (away)' : '');
+      e.details = (first || last) ? x.details : null;
+    } else e.details = x.details || null;
+    return e;
+  });
   const evs = family.concat(mine);
   // my own tasks due this day (anything overdue is shown once, on today; past days stay clean)
   const isToday = iso === toISO(today());
@@ -884,10 +902,14 @@ function calDaySection(label, iso) {
     allDay.forEach(e => {
       const c = document.createElement('span'); c.className = 'calChip' + (e.evId ? ' mine ' + e.tag : '');
       if (e.evId) c.addEventListener('click', () => openEvent(e.evId, e.occ));
-      c.textContent = e.title + (e.end && e.end > iso ? ' → ' + calShort(e.end) : '');
+      c.textContent = e.label || (e.title + (e.end && e.end > iso ? ' → ' + calShort(e.end) : ''));
       chips.appendChild(c);
     });
     day.appendChild(chips);
+    // flight details / notes for my own events, as a small line under the chips
+    allDay.filter(e => e.details).forEach(e => {
+      const n = document.createElement('div'); n.className = 'calNone'; n.textContent = '✈ ' + e.details; day.appendChild(n);
+    });
   }
   timed.forEach(e => {
     const row = document.createElement('div'); row.className = 'calEv' + (e.evId ? ' mine ' + e.tag : '');
@@ -1009,7 +1031,7 @@ const dayNum = iso => { const [y, m, d] = iso.split('-').map(Number); return Dat
 // Does this event (possibly repeating) happen on this day?
 function evOccursOn(x, iso) {
   if (iso < x.on_date) return false;
-  if (x.repeat === 'none' || !x.repeat) return iso === x.on_date;
+  if (x.repeat === 'none' || !x.repeat) return x.end_date ? iso <= x.end_date : iso === x.on_date;   // a trip covers every day up to its last day
   if ((x.skip_dates || []).includes(iso)) return false;           // this day was moved or cancelled
   if (x.repeat_until && iso > x.repeat_until) return false;
   const diff = dayNum(iso) - dayNum(x.on_date);
@@ -1033,7 +1055,10 @@ function syncEventForm() {
   const series = !!e && e.repeat !== 'none';
   $('evScopeBox').hidden = !series;
   const one = series && $('evScope').value === 'one';
-  $('evRepeat').disabled = $('evUntil').disabled = one;           // a single moved day does not repeat
+  const span = !!$('evEndDate').value;                            // a trip does not repeat
+  $('evRepeat').disabled = $('evUntil').disabled = one || span;   // a single moved day does not repeat either
+  $('evStartLbl').textContent = span ? '(leaves on the first day)' : '(empty = all day)';
+  $('evEndLbl').textContent = span ? '(back / lands on the last day)' : '(optional)';
 }
 
 function openEvent(id, occIso) {
@@ -1047,6 +1072,8 @@ function openEvent(id, occIso) {
   $('evTag').value = e ? e.tag : 'personal';
   $('evStart').value = e && e.start_time ? e.start_time.slice(0, 5) : '';
   $('evEnd').value = e && e.end_time ? e.end_time.slice(0, 5) : '';
+  $('evEndDate').value = e && e.end_date ? e.end_date : '';
+  $('evDetails').value = e && e.details ? e.details : '';
   $('evRepeat').value = e ? e.repeat : 'none';
   $('evUntil').value = e && e.repeat_until ? e.repeat_until : '';
   $('evScope').value = 'one';
@@ -1062,6 +1089,7 @@ function closeEvent() { evId = null; evOcc = null; $('evOverlay').hidden = true;
 $('calAdd').onclick = () => { openEvent(null); if (calMode === 'weeks' && calSel) $('evDate').value = calSel; };
 $('evClose').onclick = closeEvent;
 $('evScope').onchange = syncEventForm;
+$('evEndDate').addEventListener('input', syncEventForm);
 $('evOverlay').addEventListener('click', e => { if (e.target === $('evOverlay')) closeEvent(); });
 
 // Save, then show the result
@@ -1069,7 +1097,7 @@ async function saveEventRows(work) {
   $('evSave').disabled = true;
   const err = await work();
   $('evSave').disabled = false;
-  if (err) { $('evMsg').textContent = 'Could not save: ' + err.message; return; }
+  if (err) { $('evMsg').textContent = /end_date|details/.test(err.message) ? 'Trips need a one-off step: run sql/010_event_span.sql in Supabase' : 'Could not save: ' + err.message; return; }
   closeEvent();
   renderCalendar($('calMsg').textContent);
 }
@@ -1081,8 +1109,13 @@ $('evForm').addEventListener('submit', async e => {
                 repeat: $('evRepeat').value, repeat_until: $('evUntil').value || null };
   if (!row.title || !row.on_date) return;
   if (row.end_time && !row.start_time) { $('evMsg').textContent = 'Add a start time, or clear the end time.'; return; }
-  if (row.repeat === 'none') row.repeat_until = null;
   const old = evId ? myEvents.find(x => x.id === evId) : null;
+  // trips: last day + flight details. Only sent when used, so ordinary events still save before sql/010 has been run.
+  const endDate = $('evEndDate').value, details = $('evDetails').value.trim();
+  if (endDate && endDate < row.on_date) { $('evMsg').textContent = 'The last day is before the first day.'; return; }
+  if (endDate || details || (old && (old.end_date || old.details))) { row.end_date = endDate && endDate > row.on_date ? endDate : null; row.details = details || null; }
+  if (row.end_date) row.repeat = 'none';
+  if (row.repeat === 'none') row.repeat_until = null;
 
   // 1) a brand-new event, or an edit of a one-off event
   if (!old || old.repeat === 'none') {

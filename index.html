@@ -419,10 +419,9 @@
         <button class="btn ghost small" id="calPrev" hidden>‹</button>
         <button class="btn ghost small" id="calNext" hidden>›</button>
         <button class="btn ghost small" id="calAdd">+ Event</button>
-        <div class="seg" id="calView" role="tablist" aria-label="Calendar view" style="--i:2;--n:4">
+        <div class="seg" id="calView" role="tablist" aria-label="Calendar view" style="--i:1;--n:3">
           <button type="button" role="tab" data-v="day">Today</button>
           <button type="button" role="tab" data-v="days7">7 days</button>
-          <button type="button" role="tab" data-v="week">Week</button>
           <button type="button" role="tab" data-v="weeks">5 weeks</button>
         </div>
       </span>
@@ -988,8 +987,8 @@ function calShort(iso) {
   return d.getDate() + ' ' + d.toLocaleString('en-GB', { month: 'short' });
 }
 
-let calMode = 'week';   // 'week' = Monday to Sunday (default), 'day' = today + tomorrow only, 'days7' = yesterday + the next 6 days, 'weeks' = 5 weeks from this week
-let calWeek = 0;        // which week in week view: 0 = this week, 1 = next week, ...
+let calMode = 'days7';  // 'days7' = yesterday + the next 6 days (default), 'day' = today + tomorrow only, 'weeks' = 5 weeks from this week
+const JP_DAY = { Mon: '月', Tue: '火', Wed: '水', Thu: '木', Fri: '金', Sat: '土', Sun: '日' };   // weekday kanji shown next to the English day
 let calRoll = 0;        // which 7-day block in the 7 days view: 0 = yesterday + today + 5 more, 1 = the 7 days after that, ...
 let calBlock = 0;       // which 5-week block: 0 = this week + 4 more, 1 = the 5 weeks after that, ...
 let calSel = null;      // the day tapped in 5-week view (YYYY-MM-DD)
@@ -1033,7 +1032,7 @@ function calDaySection(label, iso) {
   const day = document.createElement('div'); day.className = 'calDay';
   const h3 = document.createElement('h3'); day.appendChild(h3);
   const wd = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (.+)$/.exec(label);          // "Fri 30 Oct": weekday in bold
-  if (wd) { const st = document.createElement('strong'); st.textContent = wd[1]; h3.append(st, ' ' + wd[2]); } else h3.textContent = label;
+  if (wd) { const st = document.createElement('strong'); st.textContent = wd[1] + ' ' + JP_DAY[wd[1]]; h3.append(st, ' ' + wd[2]); } else h3.textContent = label;
   const { evs, due } = calDayItems(iso);
   const allDay = evs.filter(e => e.all_day), timed = evs.filter(e => !e.all_day);
   timed.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
@@ -1082,43 +1081,29 @@ function renderCalendar(msg) {
   body.textContent = '';                       // titles go in with textContent only, never innerHTML
   body.classList.remove('wk');
   $('calMsg').textContent = msg || (evMissing ? 'Events table missing – run sql/007_someday_and_events.sql in Supabase' : '');
-  const week = calMode === 'week', five = calMode === 'weeks', roll = calMode === 'days7';
+  const five = calMode === 'weeks', roll = calMode === 'days7';
   const seg = $('calView');           // slide the highlight to the chosen view
-  const views = ['day', 'days7', 'week', 'weeks'];
+  const views = ['day', 'days7', 'weeks'];
   seg.style.setProperty('--i', views.indexOf(calMode));
   seg.querySelectorAll('button').forEach(b => b.setAttribute('aria-selected', b.dataset.v === calMode ? 'true' : 'false'));
   $('calPrev').hidden = $('calNext').hidden = calMode === 'day';
-  $('calPrev').disabled = five ? calBlock <= 0 : roll ? calRoll <= 0 : calWeek <= 0;
-  $('calNext').disabled = five ? calBlock >= 10 : roll ? calRoll >= 50 : calWeek >= 51;   // the feed is fetched 400 days ahead = about a year
+  $('calPrev').disabled = five ? calBlock <= 0 : calRoll <= 0;
+  $('calNext').disabled = five ? calBlock >= 10 : calRoll >= 50;   // the feed is fetched 400 days ahead = about a year
   const t = today();
   const dayN = n => { const d = new Date(t); d.setDate(d.getDate() + n); return d; };
   const nice = d => d.toLocaleString('en-GB', { weekday: 'short' }) + ' ' + calShort(toISO(d));
   if (five) { renderCalFive(body, t, nice); return; }
-  if (roll) {
-    // 7 days: yesterday, today and the next 5 days (then each ‹ › steps a whole 7 days)
-    const from = -1 + calRoll * 7;
-    $('calRange').textContent = calShort(toISO(dayN(from))) + ' – ' + calShort(toISO(dayN(from + 6)));
-    body.classList.add('wk');
-    for (let i = from; i < from + 7; i++) {
-      const sec = calDaySection(nice(dayN(i)), toISO(dayN(i)));
-      if (i < 0) sec.classList.add('past');
-      if (i === 0) sec.classList.add('isToday');
-      body.appendChild(sec);
-    }
-    return;
-  }
-  if (!week) {
+  if (!roll) {                                        // Today view: today + tomorrow
     $('calRange').textContent = '';
     body.appendChild(calDaySection('Today', toISO(t)));
     body.appendChild(calDaySection('Tomorrow', toISO(dayN(1))));
     return;
   }
-  // Monday of this week (JS: Sunday = 0, so Monday is 1)
-  const monOffset = -((t.getDay() + 6) % 7);
-  const first = monOffset + calWeek * 7;
-  $('calRange').textContent = calShort(toISO(dayN(first))) + ' – ' + calShort(toISO(dayN(first + 6)));
+  // 7 days: yesterday, today and the next 5 days (then each ‹ › steps a whole 7 days)
+  const from = -1 + calRoll * 7;
+  $('calRange').textContent = calShort(toISO(dayN(from))) + ' – ' + calShort(toISO(dayN(from + 6)));
   body.classList.add('wk');
-  for (let i = first; i < first + 7; i++) {
+  for (let i = from; i < from + 7; i++) {
     const sec = calDaySection(nice(dayN(i)), toISO(dayN(i)));
     if (i < 0) sec.classList.add('past');
     if (i === 0) sec.classList.add('isToday');
@@ -1140,7 +1125,7 @@ function renderCalFive(body, t, nice) {
 
   const grid = document.createElement('div'); grid.className = 'calMonth';
   ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach(n => {
-    const h = document.createElement('div'); h.className = 'mHead'; h.textContent = n; grid.appendChild(h);
+    const h = document.createElement('div'); h.className = 'mHead'; h.textContent = n + ' ' + JP_DAY[n]; grid.appendChild(h);
   });
   for (let i = 0; i < 35; i++) {
     const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
@@ -1348,16 +1333,14 @@ $('evDelete').onclick = async () => {
 };
 
 // The dropdown: Today / Week / 5 weeks. Switching always starts from the current week.
-$('calView').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; calMode = b.dataset.v; calWeek = 0; calBlock = 0; calRoll = 0; calSel = null; renderCalendar(''); });
+$('calView').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; calMode = b.dataset.v; calBlock = 0; calRoll = 0; calSel = null; renderCalendar(''); });
 $('calPrev').addEventListener('click', () => {
   if (calMode === 'weeks') { if (calBlock > 0) { calBlock--; calSel = null; renderCalendar(''); } }
-  else if (calMode === 'days7') { if (calRoll > 0) { calRoll--; renderCalendar(''); } }
-  else if (calWeek > 0) { calWeek--; renderCalendar(''); }
+  else if (calRoll > 0) { calRoll--; renderCalendar(''); }
 });
 $('calNext').addEventListener('click', () => {
   if (calMode === 'weeks') { if (calBlock < 10) { calBlock++; calSel = null; renderCalendar(''); } }
-  else if (calMode === 'days7') { if (calRoll < 50) { calRoll++; renderCalendar(''); } }
-  else if (calWeek < 51) { calWeek++; renderCalendar(''); }
+  else if (calRoll < 50) { calRoll++; renderCalendar(''); }
 });
 
 // Calendar needs the habits loaded first (it borrows their Sync URL), so it runs after them

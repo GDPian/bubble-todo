@@ -106,6 +106,14 @@
   .calDay.calEmpty { display: flex; gap: 8px; align-items: baseline; }   /* an empty day is one line, not two */
   .calDay.calEmpty h3 { margin: 0; min-width: 6.6em; }
   @media (min-width: 700px) { #calBody.wk .calDay.calEmpty { display: block; } #calBody.wk .calDay.calEmpty h3 { margin: 0 0 4px; min-width: 0; } }
+  /* View switch: a pill with a highlight that slides between Today / Week / 5 weeks */
+  .seg { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); background: rgba(255,255,255,.08);
+         border-radius: 999px; padding: 2px; isolation: isolate; }
+  .seg::before { content: ''; position: absolute; z-index: -1; top: 2px; bottom: 2px; left: 2px; width: calc((100% - 4px) / 3);
+                 border-radius: 999px; background: var(--cal); transform: translateX(calc(var(--i) * 100%)); transition: transform .2s ease; }
+  .seg button { font: inherit; font-size: .78rem; color: var(--muted); background: none; border: 0; border-radius: 999px;
+                padding: 4px 10px; cursor: pointer; white-space: nowrap; transition: color .2s; }
+  .seg button[aria-selected="true"] { color: #0f172a; font-weight: 600; }
   /* 5-week view: a Monday-Sunday grid starting with this week. Tap a day to see it in full underneath. */
   .calMonth { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
   .calMonth .mHead { font-size: .68rem; text-align: center; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
@@ -385,11 +393,11 @@
         <button class="btn ghost small" id="calPrev" hidden>‹</button>
         <button class="btn ghost small" id="calNext" hidden>›</button>
         <button class="btn ghost small" id="calAdd">+ Event</button>
-        <select id="calView" class="small-select" aria-label="Calendar view">
-          <option value="day">Today</option>
-          <option value="week">Week</option>
-          <option value="weeks">5 weeks</option>
-        </select>
+        <div class="seg" id="calView" role="tablist" aria-label="Calendar view" style="--i:1">
+          <button type="button" role="tab" data-v="day">Today</button>
+          <button type="button" role="tab" data-v="week">Week</button>
+          <button type="button" role="tab" data-v="weeks">5 weeks</button>
+        </div>
       </span>
     </div>
     <div id="calBody"></div>
@@ -902,7 +910,10 @@ function renderCalendar(msg) {
   body.classList.remove('wk');
   $('calMsg').textContent = msg || (evMissing ? 'Events table missing – run sql/007_someday_and_events.sql in Supabase' : '');
   const week = calMode === 'week', five = calMode === 'weeks';
-  $('calView').value = calMode;
+  const seg = $('calView');           // slide the highlight to the chosen view
+  const views = ['day', 'week', 'weeks'];
+  seg.style.setProperty('--i', views.indexOf(calMode));
+  seg.querySelectorAll('button').forEach(b => b.setAttribute('aria-selected', b.dataset.v === calMode ? 'true' : 'false'));
   $('calPrev').hidden = $('calNext').hidden = calMode === 'day';
   $('calPrev').disabled = five ? calBlock <= 0 : calWeek <= 0;
   $('calNext').disabled = five ? calBlock >= 10 : calWeek >= 51;   // the feed is fetched 400 days ahead = about a year
@@ -1128,7 +1139,7 @@ $('evDelete').onclick = async () => {
 };
 
 // The dropdown: Today / Week / 5 weeks. Switching always starts from the current week.
-$('calView').addEventListener('change', () => { calMode = $('calView').value; calWeek = 0; calBlock = 0; calSel = null; renderCalendar(''); });
+$('calView').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; calMode = b.dataset.v; calWeek = 0; calBlock = 0; calSel = null; renderCalendar(''); });
 $('calPrev').addEventListener('click', () => {
   if (calMode === 'weeks') { if (calBlock > 0) { calBlock--; calSel = null; renderCalendar(''); } }
   else if (calWeek > 0) { calWeek--; renderCalendar(''); }

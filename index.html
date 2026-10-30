@@ -2332,6 +2332,32 @@ document.addEventListener('keydown', e => {
   closeDetail(); closeHabitCard(); closeEvent(); $('habitOverlay').hidden = true; $('histOverlay').hidden = true;
 });
 
+// Date boxes: clicking anywhere in the box opens the calendar picker (not just the little icon)
+document.addEventListener('click', e => {
+  const el = e.target;
+  if (el && el.matches && el.matches('input[type="date"]') && !el.disabled && !el.readOnly && el.showPicker) {
+    try { el.showPicker(); } catch (err) { /* some browsers only allow it from certain clicks: the normal box still works */ }
+  }
+});
+
+// Tab inside a card (the pop-up forms): moves from box to box, and stays inside the card.
+// A date or time box would normally eat several Tab presses (day, month, year), so Tab leaves it in one go.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Tab' || e.altKey || e.ctrlKey || e.metaKey) return;
+  const card = e.target && e.target.closest && e.target.closest('.sheet');
+  if (!card) return;
+  const boxes = [...card.querySelectorAll('input, select, textarea, button')]
+    .filter(x => !x.disabled && x.tabIndex >= 0 && x.type !== 'hidden' && !x.closest('[hidden]'));
+  const i = boxes.indexOf(e.target);
+  if (i < 0) return;
+  const step = e.shiftKey ? -1 : 1;
+  const dateLike = e.target.matches('input[type="date"], input[type="time"]');
+  const atEdge = (step === 1 && i === boxes.length - 1) || (step === -1 && i === 0);
+  if (!dateLike && !atEdge) return;                       // everything else: the browser's own Tab is fine
+  e.preventDefault();
+  boxes[(i + step + boxes.length) % boxes.length].focus();
+});
+
 /* ---------- 11. Home screen icon (drawn here so we need only one file) ---------- */
 (function makeIcon() {
   const c = document.createElement('canvas'); c.width = c.height = 180;

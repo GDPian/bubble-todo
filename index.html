@@ -198,6 +198,7 @@
   .btn.good { background: #059669; }
   .btn.ghost { background: transparent; border: 1px solid var(--panel-border); color: var(--muted); }
   .btn.danger { background: transparent; border: 1px solid #7f1d1d; color: var(--error); }
+  .btn:disabled { opacity: .5; cursor: default; }
   .fgrid { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
   .fgrid label { display: flex; flex-direction: column; justify-content: flex-end; gap: 4px;   /* flex-end: boxes line up along the bottom even when one label wraps to two lines */ font-size: .75rem; color: var(--muted); }
   .fgrid .wide { grid-column: 1 / -1; }
@@ -402,6 +403,7 @@
     <div class="panel-head">
       <h2>Habits <span id="habitSummary" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2>
       <span style="display:flex;gap:6px">
+        <button class="btn ghost small" id="btnPlayGames" hidden title="Open today's unplayed games in new tabs">🎮 Play</button>
         <button class="btn ghost small" id="btnHabitHistory">📊 History</button>
         <button class="btn ghost small" id="btnHabitSettings">⚙ Settings</button>
       </span>
@@ -1442,7 +1444,50 @@ function renderHabits() {
     strip.appendChild(b);
   });
   $('habitSummary').textContent = habits.length ? `· ${doneCount} of ${habits.length} done` : '';
+  updatePlayButton();
 }
+
+/* ---------- Daily games launcher ----------
+   The 🎮 Play button opens a new tab for each daily game not yet ticked today
+   (all four if none are done). Games are found by habit name, so renaming a habit
+   still works as long as the key word stays in the name. Add or change games here. */
+const GAME_LINKS = [
+  { match: /cryptic/i,     url: 'https://www.minutecryptic.com/' },
+  { match: /connections/i, url: 'https://www.nytimes.com/games/connections' },
+  { match: /\bwordle\b/i,  url: 'https://www.nytimes.com/games/wordle/index.html' },
+  { match: /worldle/i,     url: 'https://worldle.teuteuf.fr/' },
+];
+
+// The game habits, each with its link, in the order above
+function gameHabits() {
+  const out = [];
+  GAME_LINKS.forEach(g => { const h = habits.find(x => g.match.test(x.name)); if (h) out.push({ h, url: g.url }); });
+  return out;
+}
+
+// Games still to play today (a daily habit counts as done once it is ticked today)
+function gamesLeft() { return gameHabits().filter(g => !habitState(g.h).done); }
+
+// Button shows how many are left; hidden if there are no game habits at all
+function updatePlayButton() {
+  const btn = $('btnPlayGames'), all = gameHabits(), left = gamesLeft();
+  btn.hidden = !all.length;
+  btn.disabled = !left.length;
+  btn.textContent = left.length ? `🎮 Play ${left.length}` : '🎮 All played';
+}
+
+function playGames() {
+  const left = gamesLeft();
+  let blocked = 0;
+  left.forEach(g => {
+    const w = window.open(g.url, '_blank');
+    if (w) w.opener = null; else blocked++;   // null = the browser blocked the pop-up
+  });
+  habitError(blocked
+    ? `${blocked} game tab(s) were blocked. In Chrome, click the blocked pop-up icon at the right of the address bar, choose "Always allow pop-ups and redirects", then press Play again.`
+    : '');
+}
+
 
 // Drag a habit bubble to a new place in the strip to re-order it (phone: press and hold first).
 let habitDragJustEnded = false;   // stops the tap that ends a drag from also ticking the habit
@@ -1967,6 +2012,7 @@ function renderHistory() {
 }
 
 $('btnHabitHistory').onclick = openHistory;
+$('btnPlayGames').onclick = playGames;
 $('histClose').onclick = () => { $('histOverlay').hidden = true; };
 $('histOverlay').addEventListener('click', e => { if (e.target === $('histOverlay')) $('histOverlay').hidden = true; });
 

@@ -802,6 +802,10 @@ let currentUser = null;    // who is signed in
 /* ---------- 1. Date helpers ---------- */
 
 function today() { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }
+// The habit day ticks over at 5am, so a tick made after midnight still counts for the night before.
+// Only habits use this: calendar, tasks and due dates keep following the real date.
+const HABIT_DAY_START_HOUR = 5;
+function habitDay() { const d = new Date(); d.setHours(d.getHours() - HABIT_DAY_START_HOUR); d.setHours(0, 0, 0, 0); return d; }
 function parseDate(str) { const [y, m, d] = str.split('-').map(Number); return new Date(y, m - 1, d); }
 function toISO(date) {
   const p = n => String(n).padStart(2, '0');
@@ -911,12 +915,12 @@ async function loadHabits() {
   const realRows = devMode ? ((await sbReal.from('habits').select('source_url')).data || []) : r.data;
   calSrcUrl = (realRows.map(x => x.source_url).find(u => u && u.startsWith('https://'))) || null;
 
-  const since = new Date(today()); since.setDate(since.getDate() - 90);
+  const since = new Date(habitDay()); since.setDate(since.getDate() - 90);
   const l = await sb.from('habit_log').select('id,habit_id,done_on,note,count').gte('done_on', toISO(since));
   if (l.error) { habitError('Could not load habit history: ' + l.error.message); return; }
   logs = l.data;
   // Rest days (a separate table, so they can never count as a tick). If the table is not there yet, carry on without them.
-  const since2 = new Date(today()); since2.setDate(since2.getDate() - 200);
+  const since2 = new Date(habitDay()); since2.setDate(since2.getDate() - 200);
   const rd = await sb.from('habit_rest').select('habit_id,rest_on').gte('rest_on', toISO(since2));
   restMissing = !!rd.error;
   restDays = new Set(rd.error ? [] : rd.data.map(r => r.habit_id + '|' + r.rest_on));
@@ -1350,7 +1354,7 @@ function loadAll() { return Promise.all([loadTasks(), loadHabits().then(loadCale
 
 // How should a habit look right now: growth steps, label, and whether it counts as done.
 function habitState(h) {
-  const t = today(), todayStr = toISO(t);
+  const t = habitDay(), todayStr = toISO(t);
   const target = h.kind === 'weekly' ? 1 : (h.daily_target || 1);
   // a day counts once it has all its ticks (e.g. 4 of 4 glasses of water); sheet days always count
   const dates = new Set(logs.filter(l => l.habit_id === h.id && (l.synced || (l.count || 1) >= target)).map(l => l.done_on));
@@ -1407,7 +1411,7 @@ async function toggleRest(h) {
   }
   if (h.busy) return false;
   h.busy = true;
-  const todayStr = toISO(today()), key = h.id + '|' + todayStr, had = restDays.has(key);
+  const todayStr = toISO(habitDay()), key = h.id + '|' + todayStr, had = restDays.has(key);
   if (had) restDays.delete(key); else restDays.add(key);
   renderHabits();
   const q = sb.from('habit_rest');
@@ -1578,7 +1582,7 @@ async function reorderHabits(from, to) {
 
 // Tap on a habit bubble: not done yet -> tick it (one more glass of water, etc.); fully done -> open its card.
 function onHabitTap(h) {
-  const todayStr = toISO(today()), target = h.kind === 'weekly' ? 1 : (h.daily_target || 1);
+  const todayStr = toISO(habitDay()), target = h.kind === 'weekly' ? 1 : (h.daily_target || 1);
   const full = logs.some(l => l.habit_id === h.id && l.done_on === todayStr && (l.synced || (l.count || 1) >= target));
   // A weekly habit that fills itself from the sheet (the gym) is never ticked by hand: tapping opens its card,
   // where you can mark a rest day. Same for any weekly habit already on a rest day (so it can be undone).
@@ -1591,7 +1595,7 @@ function onHabitTap(h) {
 async function tickHabit(h) {
   if (h.busy) return;
   h.busy = true;
-  const todayStr = toISO(today()), target = h.kind === 'weekly' ? 1 : (h.daily_target || 1);
+  const todayStr = toISO(habitDay()), target = h.kind === 'weekly' ? 1 : (h.daily_target || 1);
   const existing = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && !l.synced);
   let problem = '';
   if (existing) {
@@ -1619,7 +1623,7 @@ async function tickHabit(h) {
 
 // Take one tick off today (for habits with several a day); the last one removes the tick altogether
 async function untickOne(h) {
-  const todayStr = toISO(today());
+  const todayStr = toISO(habitDay());
   const row = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && !l.synced);
   if (!row) return false;
   if ((row.count || 1) <= 1) return undoToday(h);
@@ -1638,7 +1642,7 @@ async function untickOne(h) {
 // Undo today's tick
 async function undoToday(h) {
   if (h.busy) return false;
-  const todayStr = toISO(today());
+  const todayStr = toISO(habitDay());
   const mine = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && !l.synced);
   if (!mine) return false;
   h.busy = true;
@@ -1686,7 +1690,7 @@ function habitEntries(h) {
 function habitStats(h) {
   const entries = habitEntries(h);
   const set = new Set(entries.filter(e => !e.partial).map(e => e.date));   // days not finished (e.g. 2 of 4 glasses) don't count
-  const t = today(), todayStr = toISO(t);
+  const t = habitDay(), todayStr = toISO(t);
   const d30 = new Date(t); d30.setDate(d30.getDate() - 29);
   const since30 = toISO(d30), monthPrefix = todayStr.slice(0, 7);
   let last30 = 0, month = 0;
@@ -1737,7 +1741,7 @@ async function saveNote(row, note, say) {
 
 // Log a day you forgot to tick (manual habits only). Returns a message to show, or '' when it worked.
 async function addPastTick(h, iso) {
-  const todayStr = toISO(today());
+  const todayStr = toISO(habitDay());
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return 'Pick a day first.';
   if (iso >= todayStr) return 'Pick a day before today (use the bubble for today).';
   const target = h.kind === 'weekly' ? 1 : (h.daily_target || 1);        // a logged past day counts as fully done
@@ -1754,7 +1758,7 @@ async function addPastTick(h, iso) {
     if (error) return 'Could not save: ' + error.message;
     row = data;
     fullLogs.push(row);
-    const cut = new Date(today()); cut.setDate(cut.getDate() - 90);
+    const cut = new Date(habitDay()); cut.setDate(cut.getDate() - 90);
     if (iso >= toISO(cut)) logs.push(row);                                // the strip only keeps 90 days
   }
   return '';
@@ -1791,7 +1795,7 @@ function closeHabitCard() { cardId = null; $('hdOverlay').hidden = true; }
 // Top box: today's note + undo (or a tick button if it is not done yet)
 function buildHabitToday(h, opts) {
   const box = $('hdToday'); box.textContent = '';
-  const todayStr = toISO(today());
+  const todayStr = toISO(habitDay());
   const mine = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && !l.synced);
   const synced = logs.find(l => l.habit_id === h.id && l.done_on === todayStr && l.synced);
   const wrap = document.createElement('div'); wrap.className = 'today-box';
@@ -1835,7 +1839,7 @@ function buildHabitToday(h, opts) {
 
   // Forgot to tick a day? Pick it here (not for habits that tick themselves from the sheet)
   if (!h.source_url) {
-    const yest = new Date(today()); yest.setDate(yest.getDate() - 1);
+    const yest = new Date(habitDay()); yest.setDate(yest.getDate() - 1);
     const past = document.createElement('div'); past.className = 'today-box past';
     past.innerHTML = '<div class="meta">Forgot to tick a day? Log it here.</div>' +
       '<div class="form-actions"><input type="date" class="pastDate"><button class="btn ghost addpast">Add that day</button></div>' +
@@ -1856,7 +1860,7 @@ function buildHabitToday(h, opts) {
 function drawSeries(el, series, colour, unit, rangeDays) {
   el.textContent = '';
   let pts = series.slice().sort((a, b) => a.d.localeCompare(b.d));
-  if (rangeDays) { const c = new Date(today()); c.setDate(c.getDate() - rangeDays); pts = pts.filter(p => p.d >= toISO(c)); }
+  if (rangeDays) { const c = new Date(habitDay()); c.setDate(c.getDate() - rangeDays); pts = pts.filter(p => p.d >= toISO(c)); }
   if (pts.length < 2) { el.innerHTML = '<p class="meta">Not enough readings in this range yet.</p>'; return; }
   const W = 640, H = 170, L = 40, R = 10, T = 10, B = 22, NS = 'http://www.w3.org/2000/svg';
   const day = d => parseDate(d).getTime() / 86400000;
@@ -1885,7 +1889,7 @@ $('hdChartRange').addEventListener('change', () => { const h = habits.find(x => 
 
 // Stats, calendar and log (safe to redraw: it leaves the note box alone)
 function renderHabitCard(h) {
-  const st = habitStats(h), todayStr = toISO(today());
+  const st = habitStats(h), todayStr = toISO(habitDay());
   // Days the sheet has a figure for but that did not count as done (e.g. steps under the goal). Today is excluded.
   const missedDays = new Set(h.values ? Object.keys(h.values).filter(d => d !== todayStr && !st.set.has(d)) : []);
 
@@ -1912,7 +1916,7 @@ function renderHabitCard(h) {
   const heat = $('hdHeat'); heat.textContent = '';
   heat.className = 'heat' + (typed ? ' typed' : '');
   heat.style.setProperty('--c', HABIT_COLOURS[h.category] || '#a78bfa');
-  const t = today(), monday = new Date(t); monday.setDate(t.getDate() - (t.getDay() + 6) % 7);
+  const t = habitDay(), monday = new Date(t); monday.setDate(t.getDate() - (t.getDay() + 6) % 7);
   const start = new Date(monday); start.setDate(start.getDate() - 25 * 7);
   for (let i = 0; i < 26 * 7; i++) {
     const d = new Date(start); d.setDate(start.getDate() + i);

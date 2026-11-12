@@ -25,6 +25,13 @@
  *   never in the app or on GitHub. Then Deploy > Manage deployments > pencil > New version > Deploy.
  *   The app picks the calendar up by itself: it reuses the address from your habit Sync URLs.
  *
+ * MORE CALENDARS: add them in the app (Calendar box > the calendars button). They are kept in the script property
+ *   BUBBLES_CALENDARS (the app writes it for you; links are never sent back to the app). Two kinds:
+ *     - a Google calendar by its ID (read straight from your own Google Calendar, so it must be in your list there)
+ *     - a calendar feed link (.ics / webcal)
+ *   Google calendars need calendar permission ONCE: in the editor pick  bubblesAuthorise  in the function list,
+ *   press Run, and allow access. Then deploy a New version.
+ *
  * After you edit this script later: Deploy > Manage deployments > pencil > Version: New version > Deploy.
  */
 
@@ -51,6 +58,7 @@ function doGet(e) {
   try {
     // The calendar does not need the sheet, so it is answered first (a sheet problem can't break it)
     if (p.what === 'calendar') return bubblesJson_(bubblesCalendar_(p));
+    if (p.what === 'cal_list') return bubblesJson_({ sources: bubblesCalPublic_() });
     const ss = SpreadsheetApp.openById(BUBBLES_SHEET_ID);
     if (p.what === 'weight')    return bubblesJson_(bubblesWeight_(ss));
     if (p.what === 'gym')       return bubblesJson_(bubblesGym_(ss));
@@ -60,6 +68,23 @@ function doGet(e) {
     return bubblesJson_({ error: 'unknown request' });
   } catch (err) {
     return bubblesJson_({ error: String(err) });
+  }
+}
+
+// Changes to the calendar list arrive as POST (the body is JSON), so a private calendar link never sits in a web address
+function doPost(e) {
+  let b = {};
+  try { b = JSON.parse((e && e.postData && e.postData.contents) || '{}'); } catch (err) { return bubblesJson_({ error: 'bad request' }); }
+  const secret = PropertiesService.getScriptProperties().getProperty('BUBBLES_TOKEN');
+  if (!secret || b.token !== secret) return bubblesJson_({ error: 'unauthorised' });
+  try {
+    if (b.what === 'cal_test')   return bubblesJson_(bubblesCalTest_(b));
+    if (b.what === 'cal_add')    return bubblesJson_(bubblesCalAdd_(b));
+    if (b.what === 'cal_update') return bubblesJson_(bubblesCalUpdate_(b));
+    if (b.what === 'cal_remove') return bubblesJson_(bubblesCalRemove_(b));
+    return bubblesJson_({ error: 'unknown request' });
+  } catch (err) {
+    return bubblesJson_({ error: String(err && err.message || err) });
   }
 }
 
@@ -310,32 +335,192 @@ const BUBBLES_CAL_TZ = 'Asia/Tokyo';     // the calendar's time zone (times in t
 const BUBBLES_CAL_DAYS = 30;             // how many days ahead to return by default
 const BUBBLES_CAL_CACHE_SECS = 1800;     // the feed only refreshes about every 12 hours, so 30 minutes is plenty
 
+const BUBBLES_CAL_COLOR = '#2dd4bf';     // the Family Daily calendar stays teal
+const BUBBLES_CAL_MAX = 8;               // how many extra calendars can be added from the app
+
+// All calendars, in order: the Family Daily one first (script property FAMILY_CAL_URL), then the ones added in the app.
+// Each is { id, name, color, type: 'feed' | 'gcal', url (feed) | calId (gcal) }.
+function bubblesCalStored_() {
+  try {
+    const a = JSON.parse(PropertiesService.getScriptProperties().getProperty('BUBBLES_CALENDARS') || '[]');
+    return Array.isArray(a) ? a : [];
+  } catch (err) { return []; }
+}
+function bubblesCalSources_() {
+  const out = [];
+  const fam = PropertiesService.getScriptProperties().getProperty('FAMILY_CAL_URL');
+  if (fam) out.push({ id: 'family', name: 'Family', color: BUBBLES_CAL_COLOR, type: 'feed', url: fam, builtin: true });
+  return out.concat(bubblesCalStored_());
+}
+
+// What the app is allowed to see: names, colours and a harmless hint. NEVER the links or IDs themselves.
+function bubblesCalPublic_() {
+  return bubblesCalSources_().map(s => {
+    const where = s.type === 'gcal' ? String(s.calId).split('@')[1] : (String(s.url).match(/^(?:https?|webcal):\/\/([^\/?#]+)/i) || [])[1];
+    return { id: s.id, name: s.name, color: s.color, type: s.type, builtin: !!s.builtin, hint: where || '' };
+  });
+}
+
+// Check what the app sent for a new calendar, and tidy it. Throws a plain-English message if something is wrong.
+function bubblesCalClean_(b, needName) {
+  const type = b.type === 'gcal' ? 'gcal' : 'feed';
+  const name = String(b.name || '').trim().slice(0, 30);
+  if (needName && !name) throw new Error('Give the calendar a name');
+  const color = /^#[0-9a-f]{6}$/i.test(String(b.color || '')) ? String(b.color).toLowerCase() : '#fb7185';
+  const src = { type: type, name: name, color: color };
+  if (type === 'gcal') {
+    const id = String(b.calId || '').trim();
+    if (!/^[^\s@\/]+@[^\s@\/]+$/.test(id)) throw new Error('That does not look like a Google calendar ID (it contains an @)');
+    src.calId = id;
+  } else {
+    const url = String(b.url || '').trim().replace(/^webcal:/i, 'https:');
+    if (!/^https:\/\/\S+$/i.test(url)) throw new Error('A calendar link must start with https:// or webcal://');
+    src.url = url;
+  }
+  return src;
+}
+
+// Read-change-write of the stored list, one at a time
+function bubblesCalEdit_(change) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const list = bubblesCalStored_();
+    const result = change(list);
+    PropertiesService.getScriptProperties().setProperty('BUBBLES_CALENDARS', JSON.stringify(list));
+    return result;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function bubblesCalAdd_(b) {
+  const src = bubblesCalClean_(b, true);
+  const id = bubblesCalEdit_(list => {
+    if (list.length >= BUBBLES_CAL_MAX) throw new Error('You can add up to ' + BUBBLES_CAL_MAX + ' calendars here');
+    if (list.some(s => s.type === src.type && (src.type === 'gcal' ? s.calId === src.calId : s.url === src.url))) throw new Error('That calendar is already added');
+    src.id = 'c' + Utilities.getUuid().replace(/-/g, '').slice(0, 10);
+    list.push(src);
+    return src.id;
+  });
+  return { ok: true, id: id, sources: bubblesCalPublic_() };
+}
+
+function bubblesCalUpdate_(b) {
+  bubblesCalEdit_(list => {
+    const s = list.find(x => x.id === b.id);
+    if (!s) throw new Error('Calendar not found (the Family Daily one is changed in the script properties)');
+    const name = String(b.name || '').trim().slice(0, 30);
+    if (name) s.name = name;
+    if (/^#[0-9a-f]{6}$/i.test(String(b.color || ''))) s.color = String(b.color).toLowerCase();
+  });
+  return { ok: true, sources: bubblesCalPublic_() };
+}
+
+function bubblesCalRemove_(b) {
+  bubblesCalEdit_(list => {
+    const i = list.findIndex(x => x.id === b.id);
+    if (i < 0) throw new Error('Calendar not found (the Family Daily one is removed by deleting FAMILY_CAL_URL in the script properties)');
+    list.splice(i, 1);
+  });
+  return { ok: true, sources: bubblesCalPublic_() };
+}
+
+// Try a calendar BEFORE saving it: how many events in the next year, and the next few (so you can check the dates look right)
+function bubblesCalTest_(b) {
+  const src = bubblesCalClean_(b, false);
+  const todayDay = bubblesDay_(Utilities.formatDate(new Date(), BUBBLES_CAL_TZ, 'yyyy-MM-dd'));
+  const r = bubblesCalRead_(src, todayDay, todayDay + 364);
+  r.events.sort((a, c) => a.start < c.start ? -1 : a.start > c.start ? 1 : 0);
+  return { ok: true, count: r.events.length, next: r.events.slice(0, 5).map(e => ({ title: e.title, start: e.start })) };
+}
+
+// Run once from the editor so Google asks you to allow calendar access (needed for Google calendars added by ID)
+function bubblesAuthorise() {
+  return CalendarApp.getAllCalendars().length;
+}
+
+// One calendar -> { events, skipped_rules, total_in_feed } for firstDay..lastDay (day numbers, see bubblesDay_)
+function bubblesCalRead_(src, firstDay, lastDay) {
+  if (src.type === 'gcal') return bubblesGcalRead_(src.calId, firstDay, lastDay);
+  const url = String(src.url).trim().replace(/^webcal:/i, 'https:');
+  const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+  if (res.getResponseCode() !== 200) throw new Error('The calendar link answered with code ' + res.getResponseCode());
+  const text = res.getContentText();
+  if (text.indexOf('BEGIN:VCALENDAR') < 0) throw new Error('The calendar link did not return a calendar');
+  return bubblesCalWindow_(bubblesIcsEvents_(text), firstDay, lastDay);
+}
+
+// A Google calendar read directly through your Google account (repeats are already worked out by Google)
+function bubblesGcalRead_(calId, firstDay, lastDay) {
+  const cal = CalendarApp.getCalendarById(calId);
+  if (!cal) throw new Error('This calendar is not in your Google Calendar list yet. Open its add-calendar link while signed in as the owner of this script, then try again');
+  const from = Utilities.parseDate(bubblesDayIso_(firstDay) + ' 00:00', BUBBLES_CAL_TZ, 'yyyy-MM-dd HH:mm');
+  const to = Utilities.parseDate(bubblesDayIso_(lastDay + 1) + ' 00:00', BUBBLES_CAL_TZ, 'yyyy-MM-dd HH:mm');
+  // a Date -> { day, min } in the calendar's time zone
+  const parts = d => {
+    const t = Utilities.formatDate(d, BUBBLES_CAL_TZ, 'yyyy-MM-dd HH:mm').split(/[- :]/).map(Number);
+    return { day: Date.UTC(t[0], t[1] - 1, t[2]) / 86400000, min: t[3] * 60 + t[4] };
+  };
+  const found = [];
+  cal.getEvents(from, to).forEach(ev => {
+    const title = String(ev.getTitle() || '').trim();
+    if (!title) return;
+    const place = bubblesPlace_(String(ev.getLocation() || ''));
+    if (ev.isAllDayEvent()) {
+      const s = parts(ev.getAllDayStartDate()).day, endExclusive = parts(ev.getAllDayEndDate()).day;   // Google's all-day end is the day AFTER
+      found.push({ title: title, start: bubblesDayIso_(s), time: null, end: bubblesDayIso_(Math.max(s, endExclusive - 1)), end_time: null, all_day: true, place: place });
+    } else {
+      const s = parts(ev.getStartTime()), e = parts(ev.getEndTime());
+      found.push({ title: title, start: bubblesDayIso_(s.day), time: bubblesHm_(s.min), end: bubblesDayIso_(e.day), end_time: bubblesHm_(e.min), all_day: false, place: place });
+    }
+  });
+  bubblesCalSort_(found);
+  return { events: found, skipped_rules: 0, total_in_feed: found.length };
+}
+
+function bubblesCalSort_(list) {
+  list.sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : (a.time || '') < (b.time || '') ? -1 : (a.time || '') > (b.time || '') ? 1 : 0);
+}
+
+// Every calendar, merged. Each event carries "cal" (which calendar it came from); "sources" lists the calendars with
+// their colour and whether they could be read, so one broken calendar never hides the others.
 function bubblesCalendar_(p) {
-  let url = PropertiesService.getScriptProperties().getProperty('FAMILY_CAL_URL');
-  if (!url) return { error: 'Script property FAMILY_CAL_URL is not set (see the setup notes at the top of the script)' };
-  url = url.trim().replace(/^webcal:/i, 'https:');
+  const sources = bubblesCalSources_();
+  if (!sources.length) return { error: 'No calendars yet. Add one in the app (Calendar box > calendars button), or set FAMILY_CAL_URL (see the setup notes at the top of the script)' };
   const days = Math.max(1, Math.min(400, Math.round(Number(p.days)) || BUBBLES_CAL_DAYS));
   const todayIso = Utilities.formatDate(new Date(), BUBBLES_CAL_TZ, 'yyyy-MM-dd');
   const back = Math.max(0, Math.min(7, Math.round(Number(p.back)) || 0));   // also return this many days BEFORE today (for a Monday-start week)
-  const key = 'cal_' + todayIso + '_' + days + '_' + back;     // includes the date so "today" is never stale after midnight
+  const todayDay = bubblesDay_(todayIso), first = todayDay - back, last = todayDay + days - 1;
   const cache = CacheService.getScriptCache();
-  if (!p.refresh) {
-    const hit = cache.get(key);
-    if (hit) return JSON.parse(hit);
-  }
-  const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
-  if (res.getResponseCode() !== 200) return { error: 'Calendar link answered with code ' + res.getResponseCode() };
-  const text = res.getContentText();
-  if (text.indexOf('BEGIN:VCALENDAR') < 0) return { error: 'The calendar link did not return a calendar' };
-
-  const todayDay = bubblesDay_(todayIso);
-  const out = bubblesCalWindow_(bubblesIcsEvents_(text), todayDay - back, todayDay + days - 1);
-  out.generated = Utilities.formatDate(new Date(), BUBBLES_CAL_TZ, "yyyy-MM-dd'T'HH:mm");
-  out.from = bubblesDayIso_(todayDay - back);
-  out.to = bubblesDayIso_(todayDay + days - 1);
-  const json = JSON.stringify(out);
-  if (json.length < 90000) cache.put(key, json, BUBBLES_CAL_CACHE_SECS);   // cache values are limited to ~100KB
-  return out;
+  const events = [], info = [];
+  let skipped = 0, total = 0;
+  sources.forEach(src => {
+    // includes the date so "today" is never stale after midnight
+    const key = 'cal_' + src.id + '_' + todayIso + '_' + days + '_' + back;
+    try {
+      let r = null;
+      if (!p.refresh) { const hit = cache.get(key); if (hit) r = JSON.parse(hit); }
+      if (!r) {
+        r = bubblesCalRead_(src, first, last);
+        const json = JSON.stringify(r);
+        if (json.length < 90000) cache.put(key, json, BUBBLES_CAL_CACHE_SECS);   // cache values are limited to ~100KB
+      }
+      r.events.forEach(ev => { ev.cal = src.id; events.push(ev); });
+      skipped += r.skipped_rules || 0;
+      total += r.total_in_feed || 0;
+      info.push({ id: src.id, name: src.name, color: src.color, ok: true, count: r.events.length });
+    } catch (err) {
+      info.push({ id: src.id, name: src.name, color: src.color, ok: false, error: String(err && err.message || err) });
+    }
+  });
+  if (info.every(s => !s.ok)) return { error: info.map(s => s.name + ': ' + s.error).join(' | '), sources: info };   // nothing could be read at all
+  bubblesCalSort_(events);
+  return {
+    events: events, sources: info, skipped_rules: skipped, total_in_feed: total,
+    generated: Utilities.formatDate(new Date(), BUBBLES_CAL_TZ, "yyyy-MM-dd'T'HH:mm"),
+    from: bubblesDayIso_(first), to: bubblesDayIso_(last)
+  };
 }
 
 // "2026-10-29" <-> a whole number of days since 1970 (plain day maths, no time-zone surprises)
@@ -472,6 +657,6 @@ function bubblesCalWindow_(events, firstDay, lastDay) {
       });
     });
   });
-  found.sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : (a.time || '') < (b.time || '') ? -1 : (a.time || '') > (b.time || '') ? 1 : 0);
+  bubblesCalSort_(found);
   return { events: found, skipped_rules: skippedRules, total_in_feed: events.length };
 }

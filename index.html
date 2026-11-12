@@ -158,6 +158,15 @@
   .calTask:last-of-type { margin-bottom: 10px; }   /* a gap between my tasks and the timed events */
   .calEv .t { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 6.6em; }
   .calEv .p { color: var(--muted); font-size: .78rem; }
+  /* Calendars screen (which calendars feed the strip) */
+  .calList { display: grid; gap: 8px; margin: 8px 0 16px; }
+  .calRow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--panel-border); border-radius: 10px; }
+  .calRow .dot { width: 14px; height: 14px; border-radius: 50%; flex: none; background: var(--c, var(--cal)); }
+  .calRow .nm { flex: 1; min-width: 0; font-size: .9rem; }
+  .calRow .nm small { display: block; color: var(--muted); font-size: .72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .swatches { display: flex; flex-wrap: wrap; gap: 10px; }
+  .swatches button { width: 30px; height: 30px; border-radius: 50%; border: 2px solid transparent; background: var(--c); padding: 0; cursor: pointer; }
+  .swatches button[aria-pressed="true"] { border-color: var(--text); box-shadow: 0 0 0 2px var(--panel); }
 
   /* ---------- Habits strip ---------- */
   #habitStrip { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 84px; }
@@ -420,6 +429,7 @@
       <span style="display:flex;gap:6px">
         <button class="btn ghost small" id="calPrev" hidden>‹</button>
         <button class="btn ghost small" id="calNext" hidden>›</button>
+        <button class="btn ghost small" id="calCfg" title="Calendars" aria-label="Calendars">⚙</button>
         <button class="btn ghost small" id="calAdd">+ Event</button>
         <div class="seg" id="calView" role="tablist" aria-label="Calendar view" style="--i:1;--n:3">
           <button type="button" role="tab" data-v="day">Today</button>
@@ -607,6 +617,29 @@
         <button class="btn ghost" type="button" id="evClose">Close</button>
       </div>
       <div class="wide msg err" id="evMsg"></div>
+    </form>
+  </div>
+</div>
+
+<!-- ============ Calendars screen (⚙ in the Calendar box): add, test and remove calendars ============ -->
+<div class="overlay" id="calcOverlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="Calendars">
+    <div class="sheet-head"><h2>Calendars</h2><button class="btn ghost small" type="button" id="calcClose">Close</button></div>
+    <div class="calList" id="calcList"></div>
+    <form id="calcForm" class="fgrid" autocomplete="off">
+      <div class="wide meta"><strong>Add a calendar</strong></div>
+      <label class="wide">Name
+        <input id="calcName" maxlength="30" placeholder="e.g. Family Birthday">
+      </label>
+      <label class="wide">Google calendar link or ID, or a calendar feed link
+        <input id="calcSrc" required autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste it here">
+      </label>
+      <div class="wide"><div class="meta" style="margin-bottom:6px">Colour</div><div class="swatches" id="calcSwatches"></div></div>
+      <div class="wide form-actions">
+        <button class="btn ghost" type="button" id="calcTest">Test</button>
+        <button class="btn" type="submit" id="calcAdd">Add</button>
+      </div>
+      <div class="wide msg" id="calcMsg"></div>
     </form>
   </div>
 </div>
@@ -972,6 +1005,10 @@ function calendarUrl() {
   return (u.includes('what=calendar') ? u : u + '&what=calendar') + '&days=400&back=7';   // about a year ahead (the script allows up to 400); back=7 is the most it allows
 }
 
+let calSources = [];    // the calendars the script reported on last time: { id, name, color, ok, error }
+// The colour of the calendar an event came from (null = the usual teal, e.g. when the script is the older one-calendar version)
+function calColorOf(e) { const s = e.cal && calSources.find(x => x.id === e.cal); return s ? s.color : null; }
+
 async function loadCalendar() {
   const url = calendarUrl();
   if (!url) { calEvents = null; renderCalendar('Add a habit Sync URL to show the family calendar here.'); return; }
@@ -981,10 +1018,14 @@ async function loadCalendar() {
     const res = await fetch(url, { signal: ctl.signal });
     clearTimeout(timer);
     const j = await res.json();
-    if (j.error) throw new Error(j.error);
+    if (Array.isArray(j.sources)) calSources = j.sources;
+    if (j.error) { const err = new Error(j.error); err.fromScript = true; throw err; }
     calEvents = Array.isArray(j.events) ? j.events : [];
-    renderCalendar('');
-  } catch (e) { renderCalendar('Calendar unavailable' + (calEvents ? ' – showing last copy' : '')); }
+    const broken = calSources.filter(s => !s.ok).map(s => s.name);       // one calendar failing never hides the others
+    renderCalendar(broken.length ? 'Could not read: ' + broken.join(', ') + ' (see ⚙)' : '');
+  } catch (e) {
+    renderCalendar('Calendar unavailable' + (e && e.fromScript ? ': ' + String(e.message).slice(0, 160) : '') + (calEvents ? ' – showing last copy' : ''));
+  }
 }
 
 // Short date for "→ 3 Nov" on multi-day chips
@@ -1058,6 +1099,7 @@ function calDaySection(label, iso) {
     allDay.forEach(e => {
       const c = document.createElement('span'); c.className = 'calChip' + (e.evId ? ' mine ' + e.tag : '');
       if (e.evId) c.addEventListener('click', () => openEvent(e.evId, e.occ));
+      else { const col = calColorOf(e); if (col) c.style.setProperty('--c', col); }       // colour of its calendar
       c.textContent = e.label || (e.title + (e.end && e.end > iso && !e.leg ? ' → ' + calShort(e.end) : ''));
       chips.appendChild(c);
     });
@@ -1070,6 +1112,7 @@ function calDaySection(label, iso) {
   timed.forEach(e => {
     const row = document.createElement('div'); row.className = 'calEv' + (e.evId ? ' mine ' + e.tag : '');
     if (e.evId) row.addEventListener('click', () => openEvent(e.evId, e.occ));      // tap my own event = edit it
+    else { const col = calColorOf(e); if (col) row.style.setProperty('--c', col); }
     const tm = document.createElement('span'); tm.className = 't';
     // show the start time; add the end only if it is on the same day and differs
     tm.textContent = (e.start < iso ? 'cont.' : e.time) +
@@ -1149,11 +1192,13 @@ function renderCalFive(body, t, nice) {
     const { evs: allEvs, due } = calDayItems(iso);
     const evs = allEvs.filter(e => !e.leg);                                     // flight lines show in the full-day section only
     const items = due.map(x => ({ text: x.title, cls: x.tag }))
-      .concat(evs.filter(e => e.all_day).map(e => ({ text: e.title, cls: e.evId ? e.tag : '' })))
+      .concat(evs.filter(e => e.all_day).map(e => ({ text: e.title, cls: e.evId ? e.tag : '', color: e.evId ? null : calColorOf(e) })))
       .concat(evs.filter(e => !e.all_day).sort((a, b) => (a.time || '').localeCompare(b.time || ''))
-        .map(e => ({ text: e.title, cls: e.evId ? e.tag : '' })));
+        .map(e => ({ text: e.title, cls: e.evId ? e.tag : '', color: e.evId ? null : calColorOf(e) })));
     items.slice(0, 3).forEach(it => {
-      const p = document.createElement('span'); p.className = 'mPill ' + it.cls; p.textContent = it.text; cell.appendChild(p);
+      const p = document.createElement('span'); p.className = 'mPill ' + it.cls; p.textContent = it.text;
+      if (it.color) p.style.setProperty('--c', it.color);
+      cell.appendChild(p);
     });
     if (items.length > 3) { const m = document.createElement('span'); m.className = 'mMore'; m.textContent = '+' + (items.length - 3); cell.appendChild(m); }
     cell.addEventListener('click', () => { calSel = iso; renderCalendar($('calMsg').textContent); });
@@ -1166,6 +1211,141 @@ function renderCalFive(body, t, nice) {
   if (calSel === todayIso) sec.classList.add('isToday');
   body.appendChild(sec);
 }
+
+/* ---------- Calendars screen (⚙): add, test and remove calendars ----------
+   The list lives in the Apps Script (script property BUBBLES_CALENDARS), not in the app: a private calendar link
+   is sent to the script once and never comes back. The app only ever sees names, colours and a harmless hint. */
+const CAL_COLORS = ['#fb7185', '#38bdf8', '#a3e635', '#fb923c', '#facc15', '#a78bfa', '#2dd4bf', '#f472b6'];
+let calcColor = CAL_COLORS[0];
+const CAL_OLD_SCRIPT = 'Your script is out of date: paste the new bubbles_api.gs into Apps Script and deploy a New version.';
+
+// The script's address and token, taken from a habit's Sync URL (the same one the calendar already uses)
+function scriptParts() {
+  if (!calSrcUrl) return null;
+  try {
+    const u = new URL(calSrcUrl), token = u.searchParams.get('token');
+    return token ? { base: u.origin + u.pathname, token: token } : null;
+  } catch (e) { return null; }
+}
+
+async function scriptCall(init, urlSuffix) {
+  const sp = scriptParts();
+  if (!sp) throw new Error('Add a habit Sync URL first (it tells the app where your script is).');
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 30000);
+  try {
+    const res = await fetch(sp.base + (urlSuffix ? urlSuffix(sp) : ''), Object.assign({ signal: ctl.signal }, init ? init(sp) : {}));
+    let j;
+    try { j = await res.json(); } catch (e) { throw new Error(CAL_OLD_SCRIPT); }       // an old script answers with a web page, not data
+    if (j.error) throw new Error(j.error === 'unknown request' ? CAL_OLD_SCRIPT : j.error);
+    return j;
+  } catch (e) {
+    throw e.name === 'AbortError' ? new Error('The script took too long to answer. Try again.') : e;
+  } finally { clearTimeout(timer); }
+}
+// Reading the list: a normal link. Changing it: a POST with a text body (a "simple" request, so the browser needs no pre-flight check)
+const scriptGetList = () => scriptCall(null, sp => '?what=cal_list&token=' + encodeURIComponent(sp.token));
+const scriptPost = body => scriptCall(sp => ({ method: 'POST', body: JSON.stringify(Object.assign({ token: sp.token }, body)) }));
+
+// What was pasted: a Google "add calendar" link (…cid=…), a bare Google calendar ID (has an @), or a calendar feed link
+function parseCalInput(text) {
+  const s = String(text || '').trim();
+  const okId = x => /^[^\s@\/]+@[^\s@\/]+$/.test(x);
+  const q = /[?&](?:cid|src)=([^&#\s]+)/i.exec(s);
+  if (q) {
+    let raw = decodeURIComponent(q[1]);
+    if (!raw.includes('@')) {                                  // cid= holds the ID in base64
+      try { raw = raw.replace(/-/g, '+').replace(/_/g, '/'); raw = atob(raw + '='.repeat((4 - raw.length % 4) % 4)); } catch (e) { return null; }
+    }
+    return okId(raw) ? { type: 'gcal', calId: raw } : null;
+  }
+  if (/^(https?|webcal):\/\/\S+$/i.test(s)) return { type: 'feed', url: s };
+  if (okId(s)) return { type: 'gcal', calId: s };
+  return null;
+}
+
+function setCalcMsg(text, isErr) { const m = $('calcMsg'); m.textContent = text; m.classList.toggle('err', !!isErr); }
+
+function renderCalcSwatches() {
+  const box = $('calcSwatches'); box.textContent = '';
+  CAL_COLORS.forEach(c => {
+    const b = document.createElement('button'); b.type = 'button'; b.style.setProperty('--c', c);
+    b.setAttribute('aria-label', 'Colour ' + c); b.setAttribute('aria-pressed', c === calcColor ? 'true' : 'false');
+    b.addEventListener('click', () => { calcColor = c; renderCalcSwatches(); });
+    box.appendChild(b);
+  });
+}
+
+function renderCalcList(list) {
+  const box = $('calcList'); box.textContent = '';                 // names go in with textContent only
+  if (!list.length) { const n = document.createElement('div'); n.className = 'calNone'; n.textContent = 'No calendars yet.'; box.appendChild(n); return; }
+  list.forEach(s => {
+    const row = document.createElement('div'); row.className = 'calRow'; row.style.setProperty('--c', s.color);
+    const dot = document.createElement('span'); dot.className = 'dot';
+    const nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = s.name;
+    const small = document.createElement('small');
+    small.textContent = (s.type === 'gcal' ? 'Google calendar' : 'Feed link') + (s.hint ? ' · ' + s.hint : '') + (s.builtin ? ' · set in the script' : '');
+    nm.appendChild(small);
+    const st = calSources.find(x => x.id === s.id);
+    if (st && !st.ok) { const er = document.createElement('div'); er.className = 'msg err'; er.textContent = 'Could not read: ' + st.error; nm.appendChild(er); }
+    row.append(dot, nm);
+    if (!s.builtin) {
+      const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'btn danger small'; rm.textContent = 'Remove';
+      rm.addEventListener('click', async () => {
+        if (!confirm('Remove "' + s.name + '" from the calendar?')) return;
+        rm.disabled = true;
+        try { const j = await scriptPost({ what: 'cal_remove', id: s.id }); renderCalcList(j.sources || []); setCalcMsg('Removed.'); await loadCalendar(); }
+        catch (e) { rm.disabled = false; setCalcMsg(e.message, true); }
+      });
+      row.appendChild(rm);
+    }
+    box.appendChild(row);
+  });
+}
+
+async function openCalc() {
+  $('calcOverlay').hidden = false;
+  setCalcMsg('');
+  renderCalcSwatches();
+  renderCalcList([]);
+  try { renderCalcList((await scriptGetList()).sources || []); }
+  catch (e) { setCalcMsg(e.message, true); }
+}
+function closeCalc() { $('calcOverlay').hidden = true; }
+$('calCfg').onclick = openCalc;
+$('calcClose').onclick = closeCalc;
+$('calcOverlay').addEventListener('click', e => { if (e.target === $('calcOverlay')) closeCalc(); });
+
+// Test first: how many events in the next year, and the next few, so you can see the dates are right before saving
+$('calcTest').onclick = async () => {
+  const input = parseCalInput($('calcSrc').value);
+  if (!input) { setCalcMsg('That is not a Google calendar link, a calendar ID or a feed link.', true); return; }
+  $('calcTest').disabled = true; setCalcMsg('Testing…');
+  try {
+    const j = await scriptPost(Object.assign({ what: 'cal_test' }, input));
+    const next = (j.next || []).map(e => calShort(e.start) + ' ' + e.title).join(' · ');
+    setCalcMsg('Works: ' + j.count + ' events in the next year.' + (next ? ' Next: ' + next + '.' : '') + ' If the dates look right, press Add.');
+  } catch (e) { setCalcMsg(e.message, true); }
+  $('calcTest').disabled = false;
+};
+
+$('calcForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const name = $('calcName').value.trim(), input = parseCalInput($('calcSrc').value);
+  if (!name) { setCalcMsg('Give the calendar a name.', true); return; }
+  if (!input) { setCalcMsg('That is not a Google calendar link, a calendar ID or a feed link.', true); return; }
+  $('calcAdd').disabled = true; setCalcMsg('Adding…');
+  try {
+    const j = await scriptPost(Object.assign({ what: 'cal_add', name: name, color: calcColor }, input));
+    $('calcSrc').value = ''; $('calcName').value = '';
+    renderCalcList(j.sources || []);
+    setCalcMsg('Added. Loading its events…');
+    await loadCalendar();
+    renderCalcList(j.sources || []);                                    // again, so a calendar the script could not read shows why
+    const bad = calSources.find(s => s.id === j.id && !s.ok);
+    setCalcMsg(bad ? 'Added, but it could not be read yet: ' + bad.error : 'Added.', !!bad);
+  } catch (err) { setCalcMsg(err.message, true); }
+  $('calcAdd').disabled = false;
+});
 
 /* ---------- Events I type in myself (+ Event) ---------- */
 async function loadEvents() {
